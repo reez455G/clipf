@@ -18,6 +18,7 @@ pub fn report(cfg: &Config) -> String {
 
     let _ = writeln!(o, "session");
     let _ = writeln!(o, "  os               {}", std::env::consts::OS);
+    let _ = writeln!(o, "  arch             {}", std::env::consts::ARCH);
     let _ = writeln!(o, "  TERM             {}", envs("TERM"));
     let _ = writeln!(o, "  DISPLAY          {}", envs("DISPLAY"));
     let _ = writeln!(o, "  WAYLAND_DISPLAY  {}", envs("WAYLAND_DISPLAY"));
@@ -45,13 +46,24 @@ pub fn report(cfg: &Config) -> String {
     );
 
     let _ = writeln!(o, "\nhelpers");
-    for t in ["xclip", "xsel", "wl-copy", "pbcopy", "clip.exe", "wl-paste", "pbpaste"] {
+    for t in [
+        "xclip",
+        "xsel",
+        "wl-copy",
+        "pbcopy",
+        "clip.exe",
+        "powershell.exe",
+        "termux-clipboard-set",
+        "wl-paste",
+        "pbpaste",
+        "termux-clipboard-get",
+    ] {
         match which(t) {
             Some(p) => {
-                let _ = writeln!(o, "  {t:<10} {}", p.display());
+                let _ = writeln!(o, "  {t:<22} {}", p.display());
             }
             None => {
-                let _ = writeln!(o, "  {t:<10} -");
+                let _ = writeln!(o, "  {t:<22} -");
             }
         }
     }
@@ -98,6 +110,15 @@ pub fn report(cfg: &Config) -> String {
         let _ = writeln!(
             o,
             "  * Using the CLIPBOARD selection (Ctrl+V), not PRIMARY (middle-click)."
+        );
+        notes += 1;
+    }
+
+    if chosen == Backend::ClipExe {
+        let _ = writeln!(
+            o,
+            "  * clip.exe mangles non-ASCII UTF-8, so text payloads are transcoded\n\
+             \x20   to UTF-16LE automatically. Binary payloads are sent unchanged."
         );
         notes += 1;
     }
@@ -154,6 +175,15 @@ pub fn report(cfg: &Config) -> String {
              \x20       ssh HOST 'cat FILE' | clipf"
         );
         notes += 1;
+
+        if cfg!(windows) {
+            let _ = writeln!(
+                o,
+                "  ! Native Windows consoles rarely act on OSC 52. Prefer the default\n\
+                 \x20   backend here:  clipf --backend clip.exe FILE"
+            );
+            notes += 1;
+        }
     }
 
     if notes == 0 {
@@ -207,5 +237,10 @@ mod tests {
             ..Config::default()
         };
         assert!(report(&cfg).contains("unlimited"));
+    }
+
+    #[test]
+    fn report_names_the_host_architecture() {
+        assert!(report(&Config::default()).contains(std::env::consts::ARCH));
     }
 }

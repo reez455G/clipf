@@ -4,6 +4,13 @@ use std::env;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 
+/// The controlling terminal's device path. Windows has no /dev/tty; CONOUT$ is
+/// the equivalent write handle to the active console screen buffer.
+#[cfg(windows)]
+const CONSOLE_PATH: &str = "CONOUT$";
+#[cfg(not(windows))]
+const CONSOLE_PATH: &str = "/dev/tty";
+
 /// Where raw escape sequences go. Never stdout, which may be redirected into
 /// a file or another process.
 pub enum Sink {
@@ -19,7 +26,7 @@ impl Sink {
     /// process has no controlling terminal (a daemon, a `setsid` child, a CI
     /// runner). The only reliable probe is to actually open it.
     pub fn open() -> Self {
-        match OpenOptions::new().write(true).open("/dev/tty") {
+        match OpenOptions::new().write(true).open(CONSOLE_PATH) {
             Ok(f) => Sink::Tty(f),
             Err(_) => Sink::Stderr,
         }
@@ -27,7 +34,7 @@ impl Sink {
 
     pub fn name(&self) -> &'static str {
         match self {
-            Sink::Tty(_) => "/dev/tty",
+            Sink::Tty(_) => CONSOLE_PATH,
             Sink::Stderr => "stderr",
         }
     }
@@ -127,5 +134,8 @@ pub fn identify_terminal() -> (String, Osc52Support) {
     }
 
     let term = env::var("TERM").unwrap_or_else(|_| "<unset>".into());
+    if cfg!(windows) && term == "<unset>" {
+        return ("windows console (conhost)".into(), Osc52Support::Unknown);
+    }
     (format!("unknown (TERM={term})"), Osc52Support::Unknown)
 }

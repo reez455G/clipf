@@ -6,6 +6,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use crate::secret::Secret;
 use crate::term;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +17,7 @@ pub enum Backend {
     WlCopy,
     PbCopy,
     ClipExe,
+    Termux,
 }
 
 impl Backend {
@@ -28,6 +30,7 @@ impl Backend {
             "wl" | "wl-copy" | "wayland" => Some(Backend::WlCopy),
             "pbcopy" | "macos" => Some(Backend::PbCopy),
             "clip.exe" | "clip" | "wsl" => Some(Backend::ClipExe),
+            "termux" | "termux-clipboard" | "android" => Some(Backend::Termux),
             _ => None,
         }
     }
@@ -40,6 +43,7 @@ impl Backend {
             Backend::WlCopy => "wl",
             Backend::PbCopy => "pbcopy",
             Backend::ClipExe => "clip.exe",
+            Backend::Termux => "termux",
         }
     }
 
@@ -52,6 +56,7 @@ impl Backend {
             Backend::WlCopy => Some("wl-copy"),
             Backend::PbCopy => Some("pbcopy"),
             Backend::ClipExe => Some("clip.exe"),
+            Backend::Termux => Some("termux-clipboard-set"),
         }
     }
 
@@ -59,10 +64,12 @@ impl Backend {
     /// it is the only one with a size limit, but on a headless server it is
     /// also the only one that reaches the user's actual clipboard.
     pub fn detect() -> Self {
-        if which("pbcopy").is_some() {
+        if cfg!(target_os = "macos") && which("pbcopy").is_some() {
             Backend::PbCopy
-        } else if term::is_wsl() && which("clip.exe").is_some() {
+        } else if (cfg!(windows) || term::is_wsl()) && which("clip.exe").is_some() {
             Backend::ClipExe
+        } else if which("termux-clipboard-set").is_some() {
+            Backend::Termux
         } else if env::var_os("WAYLAND_DISPLAY").is_some() && which("wl-copy").is_some() {
             Backend::WlCopy
         } else if env::var_os("DISPLAY").is_some() && which("xclip").is_some() {
@@ -93,8 +100,13 @@ impl Backend {
             Backend::PbCopy => Some(("pbpaste", &[])),
             Backend::ClipExe => Some((
                 "powershell.exe",
-                &["-NoProfile", "-Command", "Get-Clipboard"],
+                &[
+                    "-NoProfile",
+                    "-Command",
+                    "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw",
+                ],
             )),
+            Backend::Termux => Some(("termux-clipboard-get", &[])),
             Backend::Osc52 => None,
         }
     }
@@ -104,6 +116,22 @@ impl Backend {
         let cmd = self
             .command()
             .ok_or_else(|| "osc52 is not an external command".to_string())?;
+
+        // clip.exe decodes stdin with the legacy OEM code page, which mangles any
+        // non-ASCII UTF-8. It does honour a UTF-16LE BOM, so transcode text payloads.
+        // Binary payloads (invalid UTF-8) are passed through untouched.
+        let transcoded: Secret;
+        let payload: &[u8] = if self == Backend::ClipExe {
+            match std::str::from_utf8(data) {
+                Ok(s) if !s.is_ascii() => {
+                    transcoded = Secret::from_vec(utf16le_with_bom(s));
+                    &transcoded
+                }
+                _ => data,
+            }
+        } else {
+            data
+        };
 
         let mut child = Command::new(cmd)
             .args(self.copy_args())
@@ -121,7 +149,7 @@ impl Backend {
                 .take()
                 .ok_or_else(|| format!("{cmd}: no stdin pipe"))?;
             stdin
-                .write_all(data)
+                .write_all(payload)
                 .map_err(|e| format!("writing to {cmd}: {e}"))?;
         }
 
@@ -156,7 +184,7 @@ impl Backend {
 
 /// `which(1)` without spawning anything.
 pub fn which(cmd: &str) -> Option<PathBuf> {
-    if cmd.contains('/') {
+    if cmd.contains('/') || cmd.contains('\\') {
         let p = PathBuf::from(cmd);
         return is_executable(&p).then_some(p);
     }
@@ -164,6 +192,17 @@ pub fn which(cmd: &str) -> Option<PathBuf> {
     env::split_paths(&path)
         .map(|dir| dir.join(cmd))
         .find(|p| is_executable(p))
+}
+
+/// UTF-16LE with a byte-order mark. clip.exe detects the BOM and decodes the
+/// rest as UTF-16, which is the only encoding it handles losslessly.
+fn utf16le_with_bom(s: &str) -> Vec<u8> {
+    let mut v = Vec::with_capacity(2 + s.len() * 2);
+    v.extend_from_slice(&[0xff, 0xfe]);
+    for unit in s.encode_utf16() {
+        v.extend_from_slice(&unit.to_le_bytes());
+    }
+    v
 }
 
 fn is_executable(p: &std::path::Path) -> bool {
@@ -193,6 +232,7 @@ mod tests {
         assert_eq!(Backend::parse("wl-copy"), Some(Backend::WlCopy));
         assert_eq!(Backend::parse("wayland"), Some(Backend::WlCopy));
         assert_eq!(Backend::parse("clip"), Some(Backend::ClipExe));
+        assert_eq!(Backend::parse("termux"), Some(Backend::Termux));
         assert_eq!(Backend::parse("nonsense"), None);
     }
 
@@ -205,6 +245,7 @@ mod tests {
             Backend::WlCopy,
             Backend::PbCopy,
             Backend::ClipExe,
+            Backend::Termux,
         ] {
             assert_eq!(Backend::parse(b.name()), Some(b), "{}", b.name());
         }
@@ -225,7 +266,25 @@ mod tests {
 
     #[test]
     fn which_finds_a_standard_binary_and_rejects_nonsense() {
+        #[cfg(unix)]
         assert!(which("sh").is_some());
+        #[cfg(windows)]
+        assert!(which("cmd.exe").is_some());
         assert!(which("definitely-not-a-real-binary-xyz").is_none());
+    }
+
+    #[test]
+    fn utf16le_bom_encodes_non_ascii() {
+        assert_eq!(utf16le_with_bom("é"), vec![0xff, 0xfe, 0xe9, 0x00]);
+        assert_eq!(utf16le_with_bom("A"), vec![0xff, 0xfe, 0x41, 0x00]);
+    }
+
+    #[test]
+    fn utf16le_bom_encodes_surrogate_pairs() {
+        // U+1F600, outside the BMP, must become a surrogate pair.
+        assert_eq!(
+            utf16le_with_bom("\u{1f600}"),
+            vec![0xff, 0xfe, 0x3d, 0xd8, 0x00, 0xde]
+        );
     }
 }
