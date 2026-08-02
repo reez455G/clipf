@@ -169,6 +169,27 @@ ssh ovpn1 'cat /etc/openvpn/server.conf' | clipf
 
 No size limit, no terminal support needed, faster.
 
+## Recipes: combining with sed/awk/grep/tail
+
+clipf only does one thing — put bytes on the clipboard, safely, on whatever
+platform you're on. It deliberately has no `--last N`, `--grep PATTERN`, or
+`--between` flags: `tail`, `grep`, `sed` and `awk` already do that job better,
+are on every machine, and compose freely through a pipe. Slicing the input is
+not clipf's problem to solve.
+
+```sh
+tail -n 10 app.log | clipf                    # last 10 lines
+head -n 20 app.log | clipf                    # first 20 lines
+grep ERROR app.log | clipf                     # only matching lines
+sed -n '10,20p' app.log | clipf                # a line range
+awk '/START/,/END/' app.log | clipf            # everything between two markers
+
+# these compose over SSH exactly the same way — the pipeline runs on the
+# remote host, only the final bytes cross the wire to your local clipboard:
+ssh host 'tail -n 10 /var/log/app.log' | clipf
+ssh host 'journalctl -u myapp -n 50' | grep ERROR | clipf
+```
+
 ## tmux
 
 ```
