@@ -21,7 +21,9 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             archive: tar.gz
-          - os: macos-13
+          # macos-13 was retired on 2025-12-04; macos-15-intel is the x86_64
+          # replacement, so this leg still builds natively.
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             archive: tar.gz
           - os: macos-14
