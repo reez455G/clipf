@@ -1,0 +1,18 @@
+[package]
+name = "clipf"
+version = "0.3.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Copy file contents to the clipboard, locally or over SSH via OSC 52"
+license = "MIT"
+
+# No dependencies. Everything (base64, arg parsing, tty handling) is std-only,
+# so `cargo build` works on an air-gapped box and the binary stays small.
+[dependencies]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
