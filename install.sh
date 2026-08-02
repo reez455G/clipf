@@ -319,9 +319,12 @@ install_local() {
 	say "installed. Run 'clipf --check' to verify this environment."
 }
 
+# Every ssh here passes -n: this script is often itself read from stdin
+# (`curl … | sh -s -- --remote HOST`), and an ssh that inherits stdin would
+# swallow the rest of the script.
 install_remote() {
 	say "probing $REMOTE over ssh"
-	uname_out=$(ssh "$REMOTE" 'uname -s; uname -m') || die "cannot reach $REMOTE over ssh"
+	uname_out=$(ssh -n "$REMOTE" 'uname -s; uname -m') || die "cannot reach $REMOTE over ssh"
 	os=$(echo "$uname_out" | sed -n 1p)
 	arch=$(echo "$uname_out" | sed -n 2p)
 
@@ -331,7 +334,7 @@ install_remote() {
 	if [ "$BIN_DIR_EXPLICIT" -eq 1 ]; then
 		dir="$BIN_DIR"
 	else
-		remote_home=$(ssh "$REMOTE" 'echo $HOME') || die "cannot reach $REMOTE over ssh"
+		remote_home=$(ssh -n "$REMOTE" 'echo $HOME') || die "cannot reach $REMOTE over ssh"
 		dir="$remote_home/.local/bin"
 	fi
 
@@ -347,10 +350,10 @@ install_remote() {
 	# $dir is resolved on this side (from the remote $HOME or --bin-dir), so the
 	# client-side expansion SC2029 warns about is exactly what is wanted here.
 	# shellcheck disable=SC2029
-	ssh "$REMOTE" "mkdir -p '$dir'" || die "cannot create $dir on $REMOTE"
+	ssh -n "$REMOTE" "mkdir -p '$dir'" || die "cannot create $dir on $REMOTE"
 	scp -q "$bin" "$REMOTE:$dir/clipf" || die "cannot copy clipf to $REMOTE"
 	# shellcheck disable=SC2029
-	ssh "$REMOTE" "chmod 0755 '$dir/clipf' && '$dir/clipf' --version" ||
+	ssh -n "$REMOTE" "chmod 0755 '$dir/clipf' && '$dir/clipf' --version" ||
 		die "clipf does not run on $REMOTE"
 
 	say "deployed to $REMOTE:$dir/clipf"
