@@ -6,6 +6,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use crate::exit::ClipfError;
 use crate::secret::Secret;
 use crate::term;
 
@@ -112,10 +113,10 @@ impl Backend {
     }
 
     /// Pipe `data` into the local helper tool.
-    pub fn copy_local(self, data: &[u8]) -> Result<(), String> {
+    pub fn copy_local(self, data: &[u8]) -> Result<(), ClipfError> {
         let cmd = self
             .command()
-            .ok_or_else(|| "osc52 is not an external command".to_string())?;
+            .ok_or_else(|| ClipfError::backend_unavailable("osc52 is not an external command"))?;
 
         // clip.exe decodes stdin with the legacy OEM code page, which mangles any
         // non-ASCII UTF-8. It does honour a UTF-16LE BOM, so transcode text payloads.
@@ -139,7 +140,7 @@ impl Backend {
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
-            .map_err(|e| format!("cannot run {cmd}: {e}"))?;
+            .map_err(|e| spawn_error(cmd, e))?;
 
         // Take stdin and drop it so the child sees EOF; xclip and wl-copy both
         // wait for the stream to close before daemonising.
@@ -147,37 +148,38 @@ impl Backend {
             let mut stdin = child
                 .stdin
                 .take()
-                .ok_or_else(|| format!("{cmd}: no stdin pipe"))?;
+                .ok_or_else(|| ClipfError::backend_failed(format!("{cmd}: no stdin pipe")))?;
             stdin
                 .write_all(payload)
-                .map_err(|e| format!("writing to {cmd}: {e}"))?;
+                .map_err(|e| ClipfError::backend_failed(format!("writing to {cmd}: {e}")))?;
         }
 
         let status = child
             .wait()
-            .map_err(|e| format!("waiting for {cmd}: {e}"))?;
+            .map_err(|e| ClipfError::backend_failed(format!("waiting for {cmd}: {e}")))?;
         if status.success() {
             Ok(())
         } else {
-            Err(format!("{cmd} exited with {status}"))
+            Err(exit_error(cmd, status))
         }
     }
 
-    pub fn paste(self) -> Result<Vec<u8>, String> {
+    pub fn paste(self) -> Result<Vec<u8>, ClipfError> {
         let (cmd, args) = self.paste_command().ok_or_else(|| {
-            "reading the clipboard over OSC 52 is not supported by terminals \
-             (the query form is disabled almost everywhere as a security measure)"
-                .to_string()
+            ClipfError::paste_unsupported(
+                "reading the clipboard over OSC 52 is not supported by terminals \
+                 (the query form is disabled almost everywhere as a security measure)",
+            )
         })?;
 
         let out = Command::new(cmd)
             .args(args)
             .output()
-            .map_err(|e| format!("cannot run {cmd}: {e}"))?;
+            .map_err(|e| spawn_error(cmd, e))?;
         if out.status.success() {
             Ok(out.stdout)
         } else {
-            Err(format!("{cmd} exited with {}", out.status))
+            Err(exit_error(cmd, out.status))
         }
     }
 }
@@ -192,6 +194,20 @@ pub fn which(cmd: &str) -> Option<PathBuf> {
     env::split_paths(&path)
         .map(|dir| dir.join(cmd))
         .find(|p| is_executable(p))
+}
+
+/// A spawn failure: the helper binary could not be started at all, even
+/// though `which` found it moments earlier (a TOCTOU race, a permission
+/// problem, or a broken symlink). An agent should treat this as "the
+/// backend is not actually usable right now."
+fn spawn_error(cmd: &str, e: std::io::Error) -> ClipfError {
+    ClipfError::backend_unavailable(format!("cannot run {cmd}: {e}"))
+}
+
+/// The helper ran but exited non-zero. Distinct from `spawn_error`: the
+/// backend is present and was tried, it just failed.
+fn exit_error(cmd: &str, status: std::process::ExitStatus) -> ClipfError {
+    ClipfError::backend_failed(format!("{cmd} exited with {status}"))
 }
 
 /// UTF-16LE with a byte-order mark. clip.exe detects the BOM and decodes the
@@ -258,11 +274,47 @@ mod tests {
     }
 
     #[test]
-    fn osc52_has_no_external_command() {
+    fn osc52_has_no_local_command_and_cannot_be_pasted() {
         assert!(Backend::Osc52.command().is_none());
-        assert!(Backend::Osc52.copy_local(b"x").is_err());
-        assert!(Backend::Osc52.paste().is_err());
+        // Osc52 is routed around copy_local/paste in main.rs (see
+        // copy_osc52); calling them directly is a programming misuse, still
+        // mapped to a defined exit code rather than panicking.
+        assert_eq!(
+            Backend::Osc52.copy_local(b"x").unwrap_err().code(),
+            5, // BackendUnavailable: osc52 has no local helper to run
+        );
+        assert_eq!(
+            Backend::Osc52.paste().unwrap_err().code(),
+            8, // PasteUnsupported: terminals disable the OSC 52 query form
+        );
     }
+
+    #[test]
+    fn spawn_failure_is_backend_unavailable() {
+        let e = spawn_error("nope", std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert_eq!(e.code(), 5);
+        assert!(e.to_string().contains("nope"));
+    }
+
+    #[test]
+    fn nonzero_exit_is_backend_failed() {
+        // Built directly rather than by spawning a real process, so this
+        // stays deterministic and needs nothing installed on the runner.
+        #[cfg(unix)]
+        let status = {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(1 << 8)
+        };
+        #[cfg(windows)]
+        let status = {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(1)
+        };
+        let e = exit_error("xclip", status);
+        assert_eq!(e.code(), 6);
+        assert!(e.to_string().contains("xclip"));
+    }
+
 
     #[test]
     fn which_finds_a_standard_binary_and_rejects_nonsense() {

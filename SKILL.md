@@ -68,11 +68,18 @@ Full reference: `clipf --help`.
 
 ## Exit codes — check these, don't just check output
 
+**Changed in 0.5.0:** codes used to collapse into `1`; they're now granular
+enough to branch on programmatically instead of parsing stderr prose.
+
 | Code | Meaning |
 |---|---|
-| `0` | copied successfully |
-| `1` | usage error or the input file/backend command failed |
+| `0` | copied successfully (or `--dry-run`/`--check`/`--help`/`--version`) |
+| `1` | usage error: bad/missing flag, or nothing to read (no FILE, stdin is a terminal) |
 | `3` | refused: payload exceeds the OSC 52 size guard (64 KB by default) |
+| `4` | input error: file missing, is a directory, or permission denied |
+| `5` | backend unavailable: helper binary not found |
+| `6` | backend failed: helper spawned but exited non-zero, or a write failed |
+| `8` | `-O`/`--paste` against a backend that can't be read back (OSC 52) |
 
 A `3` is not a fatal failure — it means the payload is large and OSC 52 would
 silently truncate it. The fix is almost always to invert the direction (see
@@ -123,7 +130,7 @@ clipf -O                   # if the local backend supports paste, read it back
 `-O`/`--paste` only works for backends that support reading (`xclip`, `xsel`,
 `wl-paste`, `pbpaste`, `clip.exe`, `termux-clipboard-get`) — plain OSC 52
 cannot be read back (terminals disable the query form as a security measure).
-`clipf -O` under an OSC 52 backend exits `1` with an explicit error saying so;
+`clipf -O` under an OSC 52 backend exits `8` with an explicit error saying so;
 `clipf --check` does not warn about this up front, only the paste attempt does.
 
 ## Repo

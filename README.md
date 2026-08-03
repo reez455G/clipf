@@ -202,8 +202,18 @@ session after changing it.
 
 ## Exit codes
 
+**Changed in 0.5.0:** exit codes are now granular — file errors used to
+collapse into `1` along with usage errors, and `--paste` under OSC 52 used to
+return `1` too. Scripts branching on exact codes should be updated; scripts
+that only checked "zero or non-zero" are unaffected.
+
 | Code | Meaning |
 |---|---|
-| 0 | copied |
-| 1 | usage or file error |
-| 3 | refused: exceeds the OSC 52 size guard |
+| 0 | copied (or `--dry-run`/`--check`/`--help`/`--version` completed) |
+| 1 | usage error: unknown flag, missing/malformed flag value, conflicting flags, or nothing to read (no FILE, stdin is a terminal) |
+| 3 | refused: payload exceeds the OSC 52 size guard |
+| 4 | input error: file missing, is a directory, permission denied, or a read failed |
+| 5 | backend unavailable: helper binary not found, or the backend has no local helper at all (`osc52`) |
+| 6 | backend failed: helper spawned but exited non-zero, or a write into the pipeline failed |
+| 7 | reserved, not currently reachable — see `src/exit.rs` |
+| 8 | `-O`/`--paste` against a backend that cannot be read back (OSC 52) |
