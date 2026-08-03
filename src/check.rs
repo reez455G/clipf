@@ -4,7 +4,8 @@ use std::env;
 use std::fmt::Write as _;
 
 use crate::backend::{which, Backend};
-use crate::cli::{Config, VERSION};
+use crate::cli::{BackendSource, Config, VERSION};
+use crate::json::{self, Value};
 use crate::term::{self, Multiplexer, Osc52Support, Sink};
 
 pub fn report(cfg: &Config) -> String {
@@ -12,7 +13,7 @@ pub fn report(cfg: &Config) -> String {
     let sink = Sink::open();
     let mux = term::multiplexer();
     let chosen = cfg.backend.unwrap_or_else(Backend::detect);
-    let (term_name, support) = term::identify_terminal();
+    let (term_name, support, _detected_via) = term::identify_terminal();
 
     let _ = writeln!(o, "clipf {VERSION} - environment check\n");
 
@@ -193,6 +194,175 @@ pub fn report(cfg: &Config) -> String {
     o
 }
 
+/// The `--check --json` form of `report`. Deliberately re-probes the
+/// environment independently rather than sharing state with `report`, so
+/// the human-readable report's existing, already-tested output can't be
+/// perturbed by refactoring for this.
+pub fn report_json(cfg: &Config) -> String {
+    let sink = Sink::open();
+    let mux = term::multiplexer();
+    let chosen = cfg.backend.unwrap_or_else(Backend::detect);
+    let (term_name, support, detected_via) = term::identify_terminal();
+
+    let mut warnings: Vec<Value> = Vec::new();
+    let mut warn = |code: &'static str, message: String| {
+        warnings.push(Value::obj(vec![
+            ("code", Value::str(code)),
+            ("message", Value::str(message)),
+        ]));
+    };
+
+    if let Some(cmd) = chosen.command() {
+        if which(cmd).is_none() {
+            warn(
+                "backend_not_installed",
+                format!("{cmd} is not installed, so this backend will fail."),
+            );
+        }
+    }
+    if term::in_ssh() && chosen != Backend::Osc52 {
+        warn(
+            "ssh_local_backend_selected",
+            "This is an SSH session but a local clipboard tool was selected; it would \
+             set the clipboard on the SERVER's display, not on your machine."
+                .to_string(),
+        );
+    }
+    if matches!(chosen, Backend::Xclip | Backend::Xsel) {
+        warn(
+            "xclip_xsel_clipboard_selection",
+            "Using the CLIPBOARD selection (Ctrl+V), not PRIMARY (middle-click).".to_string(),
+        );
+    }
+    if chosen == Backend::ClipExe {
+        warn(
+            "clip_exe_transcodes_utf16",
+            "clip.exe mangles non-ASCII UTF-8, so text payloads are transcoded to \
+             UTF-16LE automatically. Binary payloads are sent unchanged."
+                .to_string(),
+        );
+    }
+    if chosen == Backend::Osc52 {
+        match support {
+            Osc52Support::Yes => {
+                warn(
+                    "osc52_supported",
+                    format!("{term_name} supports OSC 52. Should work as-is."),
+                );
+            }
+            Osc52Support::No => {
+                warn(
+                    "osc52_unsupported",
+                    format!(
+                        "{term_name} does not support OSC 52 writes. Copying will \
+                         silently do nothing."
+                    ),
+                );
+            }
+            Osc52Support::Unknown => {
+                warn(
+                    "osc52_support_unknown",
+                    "Could not identify the terminal, so OSC 52 support is unknown."
+                        .to_string(),
+                );
+            }
+        }
+        if mux == Multiplexer::Tmux {
+            warn(
+                "tmux_detected",
+                "tmux detected; requires 'set -g set-clipboard on' in ~/.tmux.conf."
+                    .to_string(),
+            );
+        }
+        if mux == Multiplexer::Screen {
+            warn(
+                "screen_detected",
+                "screen detected; the payload will be split across several DCS \
+                 passthrough chunks, which screen reassembles."
+                    .to_string(),
+            );
+        }
+        warn(
+            "osc52_size_capped",
+            "OSC 52 payloads are size-capped and terminals truncate silently.".to_string(),
+        );
+        if cfg!(windows) {
+            warn(
+                "windows_console_osc52_unreliable",
+                "Native Windows consoles rarely act on OSC 52.".to_string(),
+            );
+        }
+    }
+
+    let backend = Value::obj(vec![
+        ("selected", Value::str(chosen.name())),
+        ("available", Value::str_array(available_backend_names())),
+        (
+            "source",
+            Value::str(match cfg.backend_source {
+                BackendSource::Auto => "auto",
+                BackendSource::Flag => "flag",
+                BackendSource::Env => "env",
+            }),
+        ),
+    ]);
+
+    let multiplexer = match mux {
+        Multiplexer::Tmux => Value::str("tmux"),
+        Multiplexer::Screen => Value::str("screen"),
+        Multiplexer::None => Value::Null,
+    };
+
+    let emulator = match detected_via {
+        Some(v) => Value::obj(vec![
+            ("name", Value::str(term_name)),
+            ("detected_via", Value::str(v)),
+        ]),
+        None => Value::Null,
+    };
+
+    let osc52 = Value::str(match support {
+        Osc52Support::Yes => "supported",
+        Osc52Support::No => "unsupported",
+        Osc52Support::Unknown => "unknown",
+    });
+
+    let value = Value::obj(vec![
+        ("schema", Value::UInt(1)),
+        ("clipf", Value::str(VERSION)),
+        ("os", Value::str(std::env::consts::OS)),
+        ("backend", backend),
+        ("multiplexer", multiplexer),
+        ("emulator", emulator),
+        ("osc52", osc52),
+        ("tty", Value::str(sink.name())),
+        ("ssh", Value::Bool(term::in_ssh())),
+        ("max_bytes", Value::UInt(cfg.max_bytes as u64)),
+        ("warnings", Value::Array(warnings)),
+    ]);
+
+    json::write(&value)
+}
+
+/// Every backend that has a local helper on `PATH` right now, plus `osc52`
+/// which is always available as the fallback.
+fn available_backend_names() -> Vec<&'static str> {
+    let mut avail: Vec<&'static str> = [
+        Backend::PbCopy,
+        Backend::ClipExe,
+        Backend::Termux,
+        Backend::WlCopy,
+        Backend::Xclip,
+        Backend::Xsel,
+    ]
+    .into_iter()
+    .filter(|b| matches!(b.command(), Some(cmd) if which(cmd).is_some()))
+    .map(Backend::name)
+    .collect();
+    avail.push(Backend::Osc52.name());
+    avail
+}
+
 fn envs(k: &str) -> String {
     env::var(k).unwrap_or_else(|_| "<unset>".into())
 }
@@ -242,5 +412,58 @@ mod tests {
     #[test]
     fn report_names_the_host_architecture() {
         assert!(report(&Config::default()).contains(std::env::consts::ARCH));
+    }
+
+    #[test]
+    fn report_json_has_the_documented_top_level_shape() {
+        // Fully deterministic across CI machines only for structure, not
+        // for values that depend on installed helpers or the real
+        // terminal (those are exercised end to end in the parrot smoke
+        // test, not here).
+        let cfg = Config::default();
+        let out = report_json(&cfg);
+        assert!(out.starts_with('{') && out.ends_with('}'), "not an object: {out}");
+        assert!(!out.contains(",}"), "trailing comma before }} in {out}");
+        assert!(!out.contains(",]"), "trailing comma before ] in {out}");
+        for key in [
+            "schema", "clipf", "os", "backend", "multiplexer", "emulator", "osc52", "tty",
+            "ssh", "max_bytes", "warnings",
+        ] {
+            assert!(
+                out.contains(&format!("\"{key}\":")),
+                "missing top-level key {key} in {out}"
+            );
+        }
+        assert!(out.contains("\"schema\":1"));
+        assert!(out.contains(&format!("\"clipf\":\"{VERSION}\"")));
+        assert!(out.contains(&format!("\"os\":\"{}\"", std::env::consts::OS)));
+    }
+
+    #[test]
+    fn report_json_backend_source_reflects_config() {
+        let auto = report_json(&Config::default());
+        assert!(auto.contains("\"source\":\"auto\""));
+
+        let flagged = Config {
+            backend: Some(Backend::Osc52),
+            backend_source: BackendSource::Flag,
+            ..Config::default()
+        };
+        assert!(report_json(&flagged).contains("\"source\":\"flag\""));
+        assert!(report_json(&flagged).contains("\"selected\":\"osc52\""));
+    }
+
+    #[test]
+    fn report_json_max_bytes_reflects_config() {
+        let cfg = Config {
+            max_bytes: 12345,
+            ..Config::default()
+        };
+        assert!(report_json(&cfg).contains("\"max_bytes\":12345"));
+    }
+
+    #[test]
+    fn available_backends_always_include_osc52() {
+        assert!(available_backend_names().contains(&"osc52"));
     }
 }

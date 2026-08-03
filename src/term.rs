@@ -90,7 +90,9 @@ pub fn is_wsl() -> bool {
         .unwrap_or(false)
 }
 
-/// Best guess at the local terminal emulator, and whether it speaks OSC 52.
+/// Best guess at the local terminal emulator, whether it speaks OSC 52, and
+/// which environment variable triggered the guess (`None` only for the two
+/// true fallback cases, where nothing identified an emulator at all).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Osc52Support {
     Yes,
@@ -98,23 +100,29 @@ pub enum Osc52Support {
     Unknown,
 }
 
-pub fn identify_terminal() -> (String, Osc52Support) {
+pub fn identify_terminal() -> (String, Osc52Support, Option<&'static str>) {
     // Emulator-specific variables are far more reliable than TERM, which is
     // usually just "xterm-256color" no matter what is really running.
     if env::var_os("KITTY_WINDOW_ID").is_some() {
-        return ("kitty".into(), Osc52Support::Yes);
+        return ("kitty".into(), Osc52Support::Yes, Some("KITTY_WINDOW_ID"));
     }
-    if env::var_os("ALACRITTY_SOCKET").is_some() || env::var_os("ALACRITTY_WINDOW_ID").is_some() {
-        return ("alacritty".into(), Osc52Support::Yes);
+    if env::var_os("ALACRITTY_SOCKET").is_some() {
+        return ("alacritty".into(), Osc52Support::Yes, Some("ALACRITTY_SOCKET"));
     }
-    if env::var_os("WEZTERM_PANE").is_some() || env::var_os("WEZTERM_EXECUTABLE").is_some() {
-        return ("wezterm".into(), Osc52Support::Yes);
+    if env::var_os("ALACRITTY_WINDOW_ID").is_some() {
+        return ("alacritty".into(), Osc52Support::Yes, Some("ALACRITTY_WINDOW_ID"));
+    }
+    if env::var_os("WEZTERM_PANE").is_some() {
+        return ("wezterm".into(), Osc52Support::Yes, Some("WEZTERM_PANE"));
+    }
+    if env::var_os("WEZTERM_EXECUTABLE").is_some() {
+        return ("wezterm".into(), Osc52Support::Yes, Some("WEZTERM_EXECUTABLE"));
     }
     if env::var_os("WT_SESSION").is_some() {
-        return ("windows terminal".into(), Osc52Support::Yes);
+        return ("windows terminal".into(), Osc52Support::Yes, Some("WT_SESSION"));
     }
     if env::var_os("KONSOLE_VERSION").is_some() {
-        return ("konsole".into(), Osc52Support::Yes);
+        return ("konsole".into(), Osc52Support::Yes, Some("KONSOLE_VERSION"));
     }
     if let Ok(tp) = env::var("TERM_PROGRAM") {
         let s = match tp.as_str() {
@@ -125,17 +133,21 @@ pub fn identify_terminal() -> (String, Osc52Support) {
             "Apple_Terminal" => Osc52Support::No,
             _ => Osc52Support::Unknown,
         };
-        return (tp.to_ascii_lowercase(), s);
+        return (tp.to_ascii_lowercase(), s, Some("TERM_PROGRAM"));
     }
     if env::var_os("VTE_VERSION").is_some() {
         // GNOME Terminal and friends. VTE only gained OSC 52 write support
         // recently and many distro builds still lack it.
-        return ("vte-based (gnome-terminal?)".into(), Osc52Support::Unknown);
+        return (
+            "vte-based (gnome-terminal?)".into(),
+            Osc52Support::Unknown,
+            Some("VTE_VERSION"),
+        );
     }
 
     let term = env::var("TERM").unwrap_or_else(|_| "<unset>".into());
     if cfg!(windows) && term == "<unset>" {
-        return ("windows console (conhost)".into(), Osc52Support::Unknown);
+        return ("windows console (conhost)".into(), Osc52Support::Unknown, None);
     }
-    (format!("unknown (TERM={term})"), Osc52Support::Unknown)
+    (format!("unknown (TERM={term})"), Osc52Support::Unknown, None)
 }

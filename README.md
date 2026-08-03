@@ -217,3 +217,58 @@ that only checked "zero or non-zero" are unaffected.
 | 6 | backend failed: helper spawned but exited non-zero, or a write into the pipeline failed |
 | 7 | reserved, not currently reachable — see `src/exit.rs` |
 | 8 | `-O`/`--paste` against a backend that cannot be read back (OSC 52) |
+
+## Machine-readable output (`--json`)
+
+New in 0.5.0. Writes a single JSON object to stdout instead of (or on top of)
+the usual prose, for scripts and agents that need to branch on structured
+fields rather than parse stderr text. Not combinable with `-p`/`--print` or
+`-O`/`--paste` — both already write their own payload to stdout, and `--json`
+is rejected at argument-parsing time if either is also given.
+
+```sh
+clipf --check --json
+clipf --json server.conf         # copy, reporting what happened
+clipf --json --dry-run server.conf
+```
+
+`--check --json`:
+
+```json
+{
+  "schema": 1,
+  "clipf": "0.5.0",
+  "os": "linux",
+  "backend": { "selected": "osc52", "available": ["osc52"], "source": "auto" },
+  "multiplexer": null,
+  "emulator": null,
+  "osc52": "unknown",
+  "tty": "stderr",
+  "ssh": false,
+  "max_bytes": 65536,
+  "warnings": [ { "code": "...", "message": "..." } ]
+}
+```
+
+`--json` on a copy (add `-v` too if you also want the stderr prose):
+
+```json
+{ "schema": 1, "clipf": "0.5.0", "ok": true, "source": "server.conf",
+  "bytes": 1234, "encoded_bytes": 1648, "backend": "osc52",
+  "stripped_newline": false, "dry_run": false }
+```
+
+On failure `ok` is `false` and an `error` object appears:
+`{ "code": 4, "kind": "input", "message": "no such file: x.txt" }` — `code`
+matches the process exit code, `kind` is the machine-stable name from the
+table above (`usage`, `too_big`, `input`, `backend_unavailable`,
+`backend_failed`, `paste_unsupported`). `bytes`/`encoded_bytes`/`backend` are
+`null` when the failure happened before they were known — except for the
+`too_big` refusal (exit `3`), where they're always present, since that's
+exactly the case where knowing the size is useful even though nothing was
+copied.
+
+**Stability contract:** `schema` only increments on a breaking change to an
+*existing* field's meaning or type, or a field's removal. Adding a new field
+does not bump it — code that reads this JSON should ignore keys it doesn't
+recognise rather than reject the object outright.

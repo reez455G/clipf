@@ -18,7 +18,6 @@
 use std::fmt;
 
 pub const EXIT_OK: u8 = 0;
-pub const EXIT_TOO_BIG: u8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
@@ -26,6 +25,11 @@ pub enum ErrorKind {
     /// or an invocation with nothing to read (no FILE, stdin is a
     /// terminal).
     Usage,
+    /// The payload exceeds the OSC 52 size guard and `--force` was not
+    /// given. Not really a "failure" so much as a refusal, but it shares
+    /// the same exit-code/message shape as every other non-zero outcome,
+    /// so it lives here too rather than as a separate `Ok(u8)` case.
+    TooBig,
     /// The named file is missing, is a directory, permission was denied, or
     /// a read failed.
     Input,
@@ -47,9 +51,10 @@ pub enum ErrorKind {
 }
 
 impl ErrorKind {
-    pub fn code(self) -> u8 {
+    pub const fn code(self) -> u8 {
         match self {
             ErrorKind::Usage => 1,
+            ErrorKind::TooBig => 3,
             ErrorKind::Input => 4,
             ErrorKind::BackendUnavailable => 5,
             ErrorKind::BackendFailed => 6,
@@ -58,14 +63,13 @@ impl ErrorKind {
         }
     }
 
-    // Consumed starting with the --json flag (D3).
-    #[allow(dead_code)]
     /// Machine-stable name used as `error.kind` in `--json` output (see
     /// `src/json.rs`). Agents should branch on this or on `code`; the
     /// prose in `message` may be reworded across versions.
     pub fn json_name(self) -> &'static str {
         match self {
             ErrorKind::Usage => "usage",
+            ErrorKind::TooBig => "too_big",
             ErrorKind::Input => "input",
             ErrorKind::BackendUnavailable => "backend_unavailable",
             ErrorKind::BackendFailed => "backend_failed",
@@ -80,6 +84,11 @@ impl ErrorKind {
 pub struct ClipfError {
     pub kind: ErrorKind,
     pub message: String,
+    /// The payload size, when known at the point of failure. Only
+    /// `TooBig` sets this — `--json` (D3) reports `bytes`/`encoded_bytes`
+    /// for that case even though the copy was refused, since that's
+    /// exactly when knowing the size is most useful.
+    pub bytes: Option<usize>,
 }
 
 impl ClipfError {
@@ -87,6 +96,7 @@ impl ClipfError {
         Self {
             kind,
             message: message.into(),
+            bytes: None,
         }
     }
 
@@ -120,6 +130,18 @@ ctor!(backend_unavailable, BackendUnavailable);
 ctor!(backend_failed, BackendFailed);
 ctor!(paste_unsupported, PasteUnsupported);
 
+impl ClipfError {
+    /// Unlike the other constructors, this one carries the payload size
+    /// that triggered the refusal.
+    pub fn too_big(message: impl Into<String>, bytes: usize) -> Self {
+        Self {
+            kind: ErrorKind::TooBig,
+            message: message.into(),
+            bytes: Some(bytes),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,6 +149,7 @@ mod tests {
     #[test]
     fn code_table_matches_the_readme() {
         assert_eq!(ErrorKind::Usage.code(), 1);
+        assert_eq!(ErrorKind::TooBig.code(), 3);
         assert_eq!(ErrorKind::Input.code(), 4);
         assert_eq!(ErrorKind::BackendUnavailable.code(), 5);
         assert_eq!(ErrorKind::BackendFailed.code(), 6);
@@ -138,6 +161,7 @@ mod tests {
     fn json_names_are_snake_case_and_stable() {
         for (kind, name) in [
             (ErrorKind::Usage, "usage"),
+            (ErrorKind::TooBig, "too_big"),
             (ErrorKind::Input, "input"),
             (ErrorKind::BackendUnavailable, "backend_unavailable"),
             (ErrorKind::BackendFailed, "backend_failed"),
@@ -153,5 +177,13 @@ mod tests {
         let e = ClipfError::input("no such file: x.txt");
         assert_eq!(e.to_string(), "no such file: x.txt");
         assert_eq!(e.code(), 4);
+        assert_eq!(e.bytes, None);
+    }
+
+    #[test]
+    fn too_big_carries_the_byte_count() {
+        let e = ClipfError::too_big("134 bytes exceeds the guard", 134);
+        assert_eq!(e.code(), 3);
+        assert_eq!(e.bytes, Some(134));
     }
 }

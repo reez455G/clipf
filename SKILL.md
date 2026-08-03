@@ -63,6 +63,7 @@ clipf -n token.txt                    # copy without the trailing newline
 | `-O`, `--paste` | Reading the current clipboard back out to stdout — use to verify a copy round-tripped, or to consume something the user just copied |
 | `-b NAME`, `--backend NAME` | Forcing a specific backend (`auto`, `osc52`, `xclip`, `xsel`, `wl`, `pbcopy`, `clip.exe`, `termux`) when auto-detection picked the wrong one |
 | `--check` | Diagnosing "the copy didn't work" — always run this first when troubleshooting rather than guessing |
+| `--json` | Getting structured output instead of prose — the primary way an agent should verify a copy or inspect the environment (see below) |
 
 Full reference: `clipf --help`.
 
@@ -115,12 +116,27 @@ awk '/START/,/END/' app.log | clipf           # everything between two markers
 ssh host 'journalctl -u myapp -n 50' | grep ERROR | clipf
 ```
 
-## Verifying a copy actually happened
+## Verifying a copy actually happened — use `--json`, not exit-code-only checks
 
 Don't assume success from exit code alone in a scripted/agent context — a
 `0` from OSC 52 only means the escape sequence was written, not that the
-terminal accepted it (some terminals don't support OSC 52 at all).
-Confirm with:
+terminal accepted it (some terminals don't support OSC 52 at all). The
+primary way to confirm what happened is `--json` (added in 0.5.0):
+
+```sh
+clipf --json server.conf
+# {"schema":1,"clipf":"0.5.0","ok":true,"source":"server.conf","bytes":1234,
+#  "encoded_bytes":1648,"backend":"osc52","stripped_newline":false,"dry_run":false}
+```
+
+`ok` tells you outright; on failure an `error: {code, kind, message}` object
+appears, with `code` matching the process exit code and `kind` a
+machine-stable string (`usage`, `too_big`, `input`, `backend_unavailable`,
+`backend_failed`, `paste_unsupported`) safe to branch on across versions —
+full schema and its stability contract are in the README.
+
+Fallback for anything not yet using `--json` (e.g. reading the clipboard
+back out, which `--json` doesn't cover):
 
 ```sh
 clipf -v somefile.txt      # stderr reports: source=... bytes=N backend=...
@@ -132,6 +148,8 @@ clipf -O                   # if the local backend supports paste, read it back
 cannot be read back (terminals disable the query form as a security measure).
 `clipf -O` under an OSC 52 backend exits `8` with an explicit error saying so;
 `clipf --check` does not warn about this up front, only the paste attempt does.
+`--json` is rejected outright if combined with `-O`/`-p` (both already own
+stdout), so use one or the other, not both.
 
 ## Repo
 

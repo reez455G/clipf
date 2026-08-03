@@ -16,11 +16,21 @@ pub enum Action {
     Version,
 }
 
+/// How `Config::backend` ended up set — reported verbatim as
+/// `backend.source` in `--check --json` output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendSource {
+    Auto,
+    Flag,
+    Env,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Config {
     pub action: Action,
     pub file: Option<PathBuf>,
     pub backend: Option<Backend>,
+    pub backend_source: BackendSource,
     pub strip_newline: bool,
     pub tee: bool,
     pub passthrough: bool,
@@ -28,6 +38,7 @@ pub struct Config {
     pub force: bool,
     pub verbose: bool,
     pub dry_run: bool,
+    pub json: bool,
 }
 
 impl Default for Config {
@@ -36,6 +47,7 @@ impl Default for Config {
             action: Action::Copy,
             file: None,
             backend: None,
+            backend_source: BackendSource::Auto,
             strip_newline: false,
             tee: false,
             passthrough: false,
@@ -43,6 +55,7 @@ impl Default for Config {
             force: false,
             verbose: false,
             dry_run: false,
+            json: false,
         }
     }
 }
@@ -53,7 +66,10 @@ impl Config {
         let mut c = Config::default();
         if let Ok(v) = std::env::var("CLIPF_BACKEND") {
             if !v.is_empty() {
-                c.backend = Backend::parse(&v);
+                if let Some(b) = Backend::parse(&v) {
+                    c.backend = Some(b);
+                    c.backend_source = BackendSource::Env;
+                }
             }
         }
         if let Ok(v) = std::env::var("CLIPF_MAX_BYTES") {
@@ -113,13 +129,18 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Config, String> 
             "-f" | "--force" => cfg.force = true,
             "-v" | "--verbose" => cfg.verbose = true,
             "--dry-run" => cfg.dry_run = true,
-            "-o" | "--osc52" => cfg.backend = Some(Backend::Osc52),
+            "--json" => cfg.json = true,
+            "-o" | "--osc52" => {
+                cfg.backend = Some(Backend::Osc52);
+                cfg.backend_source = BackendSource::Flag;
+            }
             "-b" | "--backend" => {
                 let v = take_value("--backend")?;
                 cfg.backend = Some(
                     Backend::parse(&v)
                         .ok_or_else(|| format!("unknown backend: {v} (see --help)"))?,
                 );
+                cfg.backend_source = BackendSource::Flag;
             }
             "-m" | "--max" => {
                 let v = take_value("--max")?;
@@ -136,7 +157,10 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Config, String> 
                         't' => cfg.passthrough = true,
                         'f' => cfg.force = true,
                         'v' => cfg.verbose = true,
-                        'o' => cfg.backend = Some(Backend::Osc52),
+                        'o' => {
+                            cfg.backend = Some(Backend::Osc52);
+                            cfg.backend_source = BackendSource::Flag;
+                        }
                         'O' => cfg.action = Action::Paste,
                         _ => {
                             return Err(format!(
@@ -149,6 +173,17 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Config, String> 
             }
             other => return Err(format!("unknown option: {other} (try --help)")),
         }
+    }
+
+    // --json owns stdout for its structured object; -p/--print and
+    // -O/--paste already write the payload itself there. Reject the
+    // combination here rather than at emit time, so it's a clean usage
+    // error instead of a mangled stream.
+    if cfg.json && (cfg.tee || cfg.action == Action::Paste) {
+        return Err(
+            "--json cannot be combined with -p/--print or -O/--paste (both already write to stdout)"
+                .into(),
+        );
     }
 
     Ok(cfg)
@@ -176,6 +211,8 @@ OPTIONS
     -O, --paste          print the current clipboard instead of copying
         --check          diagnose this environment and exit
         --dry-run        show what would happen, copy nothing
+        --json           machine-readable output on stdout (copy or --check;
+                          not combinable with -p/--print or -O/--paste)
     -v, --verbose        report the chosen backend and byte count
     -h, --help           this text
     -V, --version        version
@@ -191,11 +228,16 @@ EXAMPLES
     grep -v '^#' fw-rules.sh | clipf      # copy filtered output
     ssh ovpn1 'cat /etc/x.conf' | clipf   # run locally, no size limit
     clipf --check                         # \"why isn't this working?\"
+    clipf --check --json                  # same, for scripts/agents
 
-EXIT CODES
-    0  copied
-    1  usage or file error
+EXIT CODES  (changed in 0.5.0 - see README for the full table)
+    0  copied (or --dry-run/--check/--help/--version)
+    1  usage error
     3  refused: exceeds the OSC 52 size guard
+    4  input error (missing file, directory, permission denied)
+    5  backend unavailable (helper not installed)
+    6  backend failed (helper exited non-zero, or a write failed)
+    8  --paste against a backend that can't be read back (OSC 52)
 
 NOTES
     Over SSH, install nothing on the server: OSC 52 hands the data to your local
@@ -224,8 +266,9 @@ mod tests {
         assert_eq!(c.action, Action::Copy);
         assert_eq!(c.file, None);
         assert_eq!(c.backend, None);
+        assert_eq!(c.backend_source, BackendSource::Auto);
         assert_eq!(c.max_bytes, DEFAULT_MAX);
-        assert!(!c.strip_newline && !c.tee && !c.force && !c.verbose && !c.dry_run);
+        assert!(!c.strip_newline && !c.tee && !c.force && !c.verbose && !c.dry_run && !c.json);
     }
 
     #[test]
@@ -259,6 +302,13 @@ mod tests {
         assert_eq!(p(&["-o"]).unwrap().backend, Some(Backend::Osc52));
         assert!(p(&["-b", "junk"]).is_err());
         assert!(p(&["-b"]).is_err());
+    }
+
+    #[test]
+    fn explicit_backend_flag_is_recorded_as_flag_source() {
+        assert_eq!(p(&["-b", "xclip"]).unwrap().backend_source, BackendSource::Flag);
+        assert_eq!(p(&["-o"]).unwrap().backend_source, BackendSource::Flag);
+        assert_eq!(p(&[]).unwrap().backend_source, BackendSource::Auto);
     }
 
     #[test]
@@ -296,14 +346,54 @@ mod tests {
     }
 
     #[test]
+    fn json_flag_is_recognised_and_defaults_off() {
+        assert!(!p(&[]).unwrap().json);
+        assert!(p(&["--json"]).unwrap().json);
+        assert!(p(&["--check", "--json"]).unwrap().json);
+    }
+
+    #[test]
+    fn json_conflicts_with_print_and_paste() {
+        assert!(p(&["--json", "-p"]).is_err());
+        assert!(p(&["-p", "--json"]).is_err());
+        assert!(p(&["--json", "-O"]).is_err());
+        assert!(p(&["-O", "--json"]).is_err());
+        // --check --json is explicitly fine.
+        assert!(p(&["--check", "--json"]).is_ok());
+        // plain copy with --json is fine.
+        assert!(p(&["--json", "file.txt"]).is_ok());
+    }
+
+    #[test]
     fn help_text_mentions_every_flag() {
         let h = help();
         for flag in [
             "--no-newline", "--print", "--backend", "--osc52", "--tmux", "--max",
-            "--force", "--paste", "--check", "--dry-run", "--verbose", "--help",
-            "--version",
+            "--force", "--paste", "--check", "--dry-run", "--verbose", "--json",
+            "--help", "--version",
         ] {
             assert!(h.contains(flag), "help is missing {flag}");
+        }
+    }
+
+    #[test]
+    fn help_text_exit_codes_match_the_exit_module() {
+        use crate::exit::ErrorKind;
+        let h = help();
+        for kind in [
+            ErrorKind::Usage,
+            ErrorKind::Input,
+            ErrorKind::BackendUnavailable,
+            ErrorKind::BackendFailed,
+            ErrorKind::PasteUnsupported,
+        ] {
+            // Matches this file's own "    N  description" formatting exactly.
+            let marker = format!("\n    {}  ", kind.code());
+            assert!(
+                h.contains(&marker),
+                "help text's EXIT CODES section is missing code {}",
+                kind.code()
+            );
         }
     }
 }
