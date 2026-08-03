@@ -5,6 +5,7 @@ mod base64;
 mod check;
 mod cli;
 mod exit;
+mod json;
 mod osc52;
 mod secret;
 mod term;
