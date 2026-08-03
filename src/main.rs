@@ -7,6 +7,7 @@ mod cli;
 mod exit;
 mod json;
 mod osc52;
+mod scan;
 mod secret;
 mod term;
 
@@ -77,6 +78,36 @@ fn note(msg: &str) {
     eprintln!("clipf: {msg}");
 }
 
+/// The messages `warn_about_secrets` would print, split out as a pure
+/// function purely so it's directly unit-testable without capturing
+/// stderr or mutating the real process environment.
+fn secret_warnings(data: &[u8], suppressed: bool) -> Vec<String> {
+    if suppressed {
+        return Vec::new();
+    }
+    scan::scan(data)
+        .into_iter()
+        .map(|hit| {
+            format!(
+                "warning: input looks like it contains {}; the clipboard is \
+                 readable by other processes in this session",
+                hit.description
+            )
+        })
+        .collect()
+}
+
+/// Non-blocking heads-up if the payload looks like it contains a private
+/// key or API token: copy proceeds either way, exit code is unaffected.
+/// Suppressible with `CLIPF_NO_SECRET_WARN=1` for anyone who finds it
+/// noisy (e.g. deliberately copying key material on purpose, repeatedly).
+fn warn_about_secrets(data: &[u8]) {
+    let suppressed = std::env::var("CLIPF_NO_SECRET_WARN").as_deref() == Ok("1");
+    for msg in secret_warnings(data, suppressed) {
+        note(&msg);
+    }
+}
+
 /// The `source` field `--json` reports: known before (and independent of)
 /// whether the read actually succeeds, so it's available for both the
 /// success and the failure JSON shape.
@@ -110,6 +141,8 @@ fn run_copy(cfg: &Config) -> Result<CopyOutcome, ClipfError> {
     let bytes = data.len();
     if data.is_empty() {
         note("input is empty - clearing the clipboard");
+    } else {
+        warn_about_secrets(&data);
     }
 
     let chosen = cfg.backend.unwrap_or_else(Backend::detect);
@@ -367,6 +400,25 @@ fn copy_report_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_warnings_suppressed_flag_produces_nothing() {
+        assert!(secret_warnings(b"AKIAIOSFODNN7EXAMPLE", true).is_empty());
+    }
+
+    #[test]
+    fn secret_warnings_unsuppressed_reports_the_match() {
+        let msgs = secret_warnings(b"AKIAIOSFODNN7EXAMPLE", false);
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].contains("AWS access key"));
+        // Never echo the actual match.
+        assert!(!msgs[0].contains("AKIAIOSFODNN7EXAMPLE"));
+    }
+
+    #[test]
+    fn secret_warnings_clean_input_produces_nothing() {
+        assert!(secret_warnings(b"just an ordinary config file", false).is_empty());
+    }
 
     #[test]
     fn read_stdin_secret_small_payload_round_trips() {
