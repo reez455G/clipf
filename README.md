@@ -29,15 +29,11 @@ irm https://raw.githubusercontent.com/reez455G/clipf/main/install.ps1 | iex
 From source, if you have Rust and would rather compile it:
 
 ```sh
-cargo install --git https://github.com/reez455G/clipf --locked
+cargo install clipf --locked
 ```
 
-**Not yet available: `cargo install clipf`.** The crate isn't published to
-crates.io yet — publishing needs a `CARGO_REGISTRY_TOKEN` repo secret that
-hasn't been configured. `.github/workflows/release.yml`'s `publish-crate`
-job is wired to run `cargo publish --locked` automatically on the next
-tagged release once that secret exists; until then, use one of the methods
-above.
+(Or `cargo install --git https://github.com/reez455G/clipf --locked` to build
+from the latest unreleased `main` instead of the last tagged release.)
 
 `install.sh` flags: `--version v0.5.0` to pin a release, `--bin-dir DIR` to choose
 where it lands (default `/usr/local/bin` as root, `$PREFIX/bin` on Termux,
