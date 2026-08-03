@@ -121,12 +121,14 @@ under `/tmp` — meaning `.env` contents and private keys hit the filesystem, wh
 they survive a crash and may outlive the process. Here the payload stays in
 memory, in a buffer that overwrites itself on drop with volatile writes the
 optimiser cannot elide. File reads preallocate the exact size so the buffer never
-reallocates and leaves an unwiped copy behind.
+reallocates; stdin reads (unknown length up front) are read in fixed-size
+chunks that also never reallocate, concatenated into one exact-size buffer
+once the total is known — so, as of 0.5.0, neither path leaves a stale,
+unwiped copy behind from a buffer growing mid-read.
 
-This is best-effort, not a guarantee: reading from stdin has unknown length so
-growth can still leave stale copies, and nothing here defends against swap, core
-dumps, or a process with ptrace rights. It is strictly better than a temp file,
-not a secrets manager.
+This is still best-effort, not a guarantee: nothing here defends against the
+OS paging a page out to swap, a core dump, or a process with ptrace rights.
+It is strictly better than a temp file, not a secrets manager.
 
 **screen payloads are chunked correctly.** GNU screen truncates long DCS
 passthrough strings. The shell version emitted one oversized DCS and silently

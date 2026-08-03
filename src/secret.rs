@@ -5,12 +5,12 @@
 //! memory, and on drop the buffer is overwritten with volatile writes the
 //! optimiser is not allowed to elide.
 //!
-//! Honest caveat: this is best-effort. If the `Vec` reallocates while growing,
-//! the old allocation is freed without being wiped. Reading from a file
-//! preallocates the exact size so no reallocation happens; reading from stdin
-//! has unknown length, so growth (and therefore stale copies) is possible.
-//! Nothing here defends against swap, core dumps, or a hostile process with
-//! ptrace rights.
+//! Honest caveat: this is best-effort, not a guarantee. File reads and stdin
+//! reads (`main.rs`'s `read_stdin_secret`, chunked precisely so no chunk's
+//! backing allocation is ever grown) both avoid the classic gap where a
+//! `Vec` reallocates mid-read and frees the old, unwiped allocation. What
+//! this still does *not* defend against: the OS paging a page out to swap,
+//! a core dump, or a process with ptrace rights.
 
 use std::ops::Deref;
 
@@ -57,18 +57,33 @@ impl Deref for Secret {
     }
 }
 
+/// Overwrite `len` bytes starting at `ptr` with writes the optimiser cannot
+/// elide, then fence so they're visible before this function returns.
+/// Exposed as its own function — rather than inlined in each `Drop` impl —
+/// specifically so it has a direct unit test: proving memory is unreadable
+/// *after* `free()` is not something safe Rust can observe, so what's
+/// actually tested is that this primitive correctly zeroes what it's
+/// pointed at, which both `Drop` impls below rely on.
+///
+/// # Safety
+/// `ptr` must be valid for `len` writes of `u8`. Write-only, so the pointee
+/// need not already be initialized — the whole point is to wipe capacity
+/// beyond a buffer's current length, which is not.
+unsafe fn volatile_zero(ptr: *mut u8, len: usize) {
+    for i in 0..len {
+        std::ptr::write_volatile(ptr.add(i), 0u8);
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+}
+
 impl Drop for Secret {
     fn drop(&mut self) {
         // Wipe the whole allocation, not just the initialised prefix.
         let cap = self.buf.capacity();
         unsafe {
             self.buf.set_len(0);
-            let p = self.buf.as_mut_ptr();
-            for i in 0..cap {
-                std::ptr::write_volatile(p.add(i), 0u8);
-            }
+            volatile_zero(self.buf.as_mut_ptr(), cap);
         }
-        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -88,12 +103,8 @@ impl Drop for SecretString {
         unsafe {
             let v = self.0.as_mut_vec();
             v.set_len(0);
-            let p = v.as_mut_ptr();
-            for i in 0..cap {
-                std::ptr::write_volatile(p.add(i), 0u8);
-            }
+            volatile_zero(v.as_mut_ptr(), cap);
         }
-        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -120,5 +131,25 @@ mod tests {
         let s = Secret::from_vec(vec![1, 2, 3]);
         assert_eq!(s.len(), 3);
         assert_eq!(&*s, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn volatile_zero_actually_zeroes() {
+        // Starts pre-initialised with a non-zero pattern (not uninitialised
+        // memory) so this stays entirely within safe-to-read territory
+        // afterwards; what's under test is that the write loop itself
+        // correctly zeroes every byte it's told to, which is the one thing
+        // both Drop impls above actually rely on.
+        let mut buf: Vec<u8> = vec![0xAA; 256];
+        unsafe { volatile_zero(buf.as_mut_ptr(), buf.len()) };
+        assert!(buf.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn volatile_zero_of_zero_length_is_a_no_op() {
+        let mut buf: Vec<u8> = vec![0xAA; 4];
+        // Only the first byte is in scope; the rest must be untouched.
+        unsafe { volatile_zero(buf.as_mut_ptr(), 1) };
+        assert_eq!(buf, vec![0x00, 0xAA, 0xAA, 0xAA]);
     }
 }

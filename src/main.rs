@@ -209,6 +209,59 @@ fn copy_osc52(cfg: &Config, data: &[u8], source: &str) -> Result<(), ClipfError>
     Ok(())
 }
 
+/// Read all of stdin without ever leaving an unwiped copy behind from a
+/// buffer reallocation. `Vec::read_to_end` grows its buffer with the
+/// allocator's normal strategy, which frees the old, smaller allocation
+/// without wiping it first — precisely the gap this closes.
+///
+/// Reads in a series of `Secret`-owned chunks — each one fixed-size once
+/// allocated, so nothing inside a chunk ever grows — starting small and
+/// doubling (capped) as long as a chunk fills completely, since that's the
+/// signal more data is coming. Concatenates into one exact-size final
+/// buffer (same "preallocate the exact length" trick the file-read path
+/// already uses, now that the total is known), then lets `chunks` drop,
+/// which wipes each intermediate chunk via `Secret`'s existing `Drop`.
+const STDIN_INITIAL_CHUNK: usize = 8192;
+const STDIN_MAX_CHUNK: usize = 1 << 20;
+
+fn read_stdin_secret(r: &mut impl Read) -> io::Result<Secret> {
+    let mut chunks: Vec<Secret> = Vec::new();
+    let mut total = 0usize;
+    let mut chunk_size = STDIN_INITIAL_CHUNK;
+
+    loop {
+        let mut chunk = Secret::with_capacity(chunk_size);
+        chunk.as_mut_vec().resize(chunk_size, 0);
+
+        let mut filled = 0usize;
+        // A single read() call is not obliged to fill the buffer even when
+        // more data remains, so keep going until this chunk is full or the
+        // stream truly ends.
+        while filled < chunk_size {
+            let n = r.read(&mut chunk.as_mut_vec()[filled..])?;
+            if n == 0 {
+                break;
+            }
+            filled += n;
+        }
+        chunk.as_mut_vec().truncate(filled);
+        total += filled;
+        let hit_eof = filled < chunk_size;
+        chunks.push(chunk);
+        if hit_eof {
+            break;
+        }
+        chunk_size = (chunk_size * 2).min(STDIN_MAX_CHUNK);
+    }
+
+    let mut out = Secret::with_capacity(total);
+    for chunk in &chunks {
+        out.as_mut_vec().extend_from_slice(&chunk);
+    }
+    Ok(out)
+    // `chunks` drops here; each intermediate Secret wipes its own capacity.
+}
+
 /// Read the payload into memory. Never staged on disk: the whole point is that
 /// this often carries credentials.
 fn read_input(file: Option<&Path>) -> Result<(Secret, String), ClipfError> {
@@ -219,10 +272,7 @@ fn read_input(file: Option<&Path>) -> Result<(Secret, String), ClipfError> {
                     "no FILE given and stdin is a terminal (try --help)",
                 ));
             }
-            let mut buf = Secret::with_capacity(8192);
-            io::stdin()
-                .lock()
-                .read_to_end(buf.as_mut_vec())
+            let buf = read_stdin_secret(&mut io::stdin().lock())
                 .map_err(|e| ClipfError::input(format!("reading stdin: {e}")))?;
             Ok((buf, "<stdin>".to_string()))
         }
@@ -317,6 +367,48 @@ fn copy_report_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_stdin_secret_small_payload_round_trips() {
+        let mut src = io::Cursor::new(b"hello world".to_vec());
+        let out = read_stdin_secret(&mut src).unwrap();
+        assert_eq!(&*out, b"hello world");
+    }
+
+    #[test]
+    fn read_stdin_secret_empty_is_empty() {
+        let mut src = io::Cursor::new(Vec::<u8>::new());
+        let out = read_stdin_secret(&mut src).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn read_stdin_secret_spans_multiple_chunks() {
+        // Bigger than STDIN_INITIAL_CHUNK (8192), forcing at least a
+        // second chunk. Content correctness across the chunk boundary is
+        // what proves the concatenation step is right; the wipe-on-drop of
+        // each intermediate chunk is proven separately in secret.rs
+        // (volatile_zero_actually_zeroes) — Secret's Drop, which every
+        // chunk here goes through unconditionally, is exactly what that
+        // test exercises.
+        let payload: Vec<u8> = (0..20_000u32).map(|i| (i % 256) as u8).collect();
+        let mut src = io::Cursor::new(payload.clone());
+        let out = read_stdin_secret(&mut src).unwrap();
+        assert_eq!(out.len(), payload.len());
+        assert_eq!(&*out, payload.as_slice());
+    }
+
+    #[test]
+    fn read_stdin_secret_exercises_chunk_growth_past_one_meg() {
+        // Forces several doublings (8K -> 16K -> ... -> capped at 1M), so
+        // the growth-then-cap arithmetic is exercised, not just a single
+        // chunk boundary.
+        let payload = vec![0x5Au8; 3 * 1024 * 1024];
+        let mut src = io::Cursor::new(payload.clone());
+        let out = read_stdin_secret(&mut src).unwrap();
+        assert_eq!(out.len(), payload.len());
+        assert_eq!(&*out, payload.as_slice());
+    }
 
     #[test]
     fn missing_file_is_input_error() {
