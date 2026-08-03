@@ -90,7 +90,9 @@ jobs:
         shell: bash
         run: |
           cd dist
-          sha256sum clipf-* > SHA256SUMS
+          # clipf* (not clipf-*): also covers clipf.bash/.zsh/.fish, which
+          # use a dot, not a hyphen, after the name.
+          sha256sum clipf* > SHA256SUMS
       - name: Publish
         run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
         env:
