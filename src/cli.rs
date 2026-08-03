@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use crate::backend::Backend;
+use crate::completions::Shell;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DEFAULT_MAX: usize = 65536;
@@ -14,6 +15,7 @@ pub enum Action {
     Check,
     Help,
     Version,
+    Completions(Shell),
 }
 
 /// How `Config::backend` ended up set — reported verbatim as
@@ -130,6 +132,15 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Config, String> 
             "-v" | "--verbose" => cfg.verbose = true,
             "--dry-run" => cfg.dry_run = true,
             "--json" => cfg.json = true,
+            "--completions" => {
+                let v = take_value("--completions")?;
+                let shell = Shell::parse(&v)
+                    .ok_or_else(|| format!("unknown shell: {v} (expected bash, zsh, or fish)"))?;
+                return Ok(Config {
+                    action: Action::Completions(shell),
+                    ..cfg
+                });
+            }
             "-o" | "--osc52" => {
                 cfg.backend = Some(Backend::Osc52);
                 cfg.backend_source = BackendSource::Flag;
@@ -213,6 +224,7 @@ OPTIONS
         --dry-run        show what would happen, copy nothing
         --json           machine-readable output on stdout (copy or --check;
                           not combinable with -p/--print or -O/--paste)
+        --completions SHELL   print a completion script: bash|zsh|fish
     -v, --verbose        report the chosen backend and byte count
     -h, --help           this text
     -V, --version        version
@@ -221,6 +233,7 @@ ENVIRONMENT
     CLIPF_BACKEND            same as --backend
     CLIPF_MAX_BYTES          same as --max
     CLIPF_TMUX_PASSTHROUGH   set to 1 to default --tmux on
+    CLIPF_NO_SECRET_WARN     set to 1 to silence the private-key/API-token warning
 
 EXAMPLES
     clipf server.conf                     # copy a config file
@@ -229,6 +242,7 @@ EXAMPLES
     ssh ovpn1 'cat /etc/x.conf' | clipf   # run locally, no size limit
     clipf --check                         # \"why isn't this working?\"
     clipf --check --json                  # same, for scripts/agents
+    clipf --completions zsh >> ~/.zshrc   # (or your shell's completion dir)
 
 EXIT CODES  (changed in 0.5.0 - see README for the full table)
     0  copied (or --dry-run/--check/--help/--version)
@@ -365,12 +379,34 @@ mod tests {
     }
 
     #[test]
+    fn completions_flag_selects_the_shell() {
+        assert_eq!(
+            p(&["--completions", "bash"]).unwrap().action,
+            Action::Completions(Shell::Bash)
+        );
+        assert_eq!(
+            p(&["--completions", "zsh"]).unwrap().action,
+            Action::Completions(Shell::Zsh)
+        );
+        assert_eq!(
+            p(&["--completions", "fish"]).unwrap().action,
+            Action::Completions(Shell::Fish)
+        );
+        assert_eq!(
+            p(&["--completions=bash"]).unwrap().action,
+            Action::Completions(Shell::Bash)
+        );
+        assert!(p(&["--completions", "powershell"]).is_err());
+        assert!(p(&["--completions"]).is_err());
+    }
+
+    #[test]
     fn help_text_mentions_every_flag() {
         let h = help();
         for flag in [
             "--no-newline", "--print", "--backend", "--osc52", "--tmux", "--max",
             "--force", "--paste", "--check", "--dry-run", "--verbose", "--json",
-            "--help", "--version",
+            "--completions", "--help", "--version",
         ] {
             assert!(h.contains(flag), "help is missing {flag}");
         }

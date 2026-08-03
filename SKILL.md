@@ -151,6 +151,16 @@ cannot be read back (terminals disable the query form as a security measure).
 `--json` is rejected outright if combined with `-O`/`-p` (both already own
 stdout), so use one or the other, not both.
 
+## Heads-up: it may warn about secret-shaped input
+
+Since 0.5.0, clipf scans the first 8KB of the payload for obvious secret
+shapes (PEM private keys, AWS access key IDs, GitHub/Anthropic/Slack
+tokens) and prints one stderr line if it finds one — copy still proceeds,
+exit code is unaffected, and the warning never echoes the actual match.
+Don't treat this line as an error when parsing stderr; if you're
+deliberately copying key material on purpose and the warning is unwanted
+noise, set `CLIPF_NO_SECRET_WARN=1`.
+
 ## Repo
 
 Source, install scripts, and full README: https://github.com/reez455G/clipf

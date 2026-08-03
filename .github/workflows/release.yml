@@ -74,6 +74,18 @@ jobs:
         with:
           merge-multiple: true
           path: dist
+      - name: Generate shell completions
+        shell: bash
+        run: |
+          # x86_64-unknown-linux-musl is statically linked, so it runs
+          # natively on this ubuntu-latest (x86_64) runner with nothing
+          # else installed -- these ship as release assets so users get
+          # completions without a compiler or clipf itself.
+          tar -xzf dist/clipf-x86_64-unknown-linux-musl.tar.gz -C /tmp
+          chmod +x /tmp/clipf
+          /tmp/clipf --completions bash > dist/clipf.bash
+          /tmp/clipf --completions zsh > dist/clipf.zsh
+          /tmp/clipf --completions fish > dist/clipf.fish
       - name: Generate SHA256SUMS
         shell: bash
         run: |
@@ -86,3 +98,23 @@ jobs:
           # This job has no checkout, so gh cannot infer the repo from a git
           # remote; name it explicitly.
           GH_REPO: ${{ github.repository }}
+
+  publish-crate:
+    needs: build
+    runs-on: ubuntu-latest
+    # Skips cleanly (rather than failing the release) when the secret isn't
+    # configured -- crates.io publishing needs an API token from
+    # https://crates.io/settings/tokens added as a repo secret named
+    # CARGO_REGISTRY_TOKEN. Until that's set, this job is a no-op and the
+    # GitHub release above is entirely unaffected.
+    if: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

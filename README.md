@@ -32,6 +32,13 @@ From source, if you have Rust and would rather compile it:
 cargo install --git https://github.com/reez455G/clipf --locked
 ```
 
+**Not yet available: `cargo install clipf`.** The crate isn't published to
+crates.io yet — publishing needs a `CARGO_REGISTRY_TOKEN` repo secret that
+hasn't been configured. `.github/workflows/release.yml`'s `publish-crate`
+job is wired to run `cargo publish --locked` automatically on the next
+tagged release once that secret exists; until then, use one of the methods
+above.
+
 `install.sh` flags: `--version v0.4.0` to pin a release, `--bin-dir DIR` to choose
 where it lands (default `/usr/local/bin` as root, `$PREFIX/bin` on Termux,
 `~/.local/bin` otherwise), `--no-path` to leave your shell rc files alone, and
@@ -59,6 +66,19 @@ so they run on anything from CentOS 7 to Alpine.
 | WSL | use the Linux x86_64 build | `clip.exe` |
 | Android / Termux | use the Linux build for your device | `termux-clipboard-set` |
 | Other Unix (BSD, illumos, …) | build from source | OSC 52, or `xclip`/`xsel` |
+
+### Shell completions
+
+Bash, zsh, and fish completions ship attached to every release
+(`clipf.bash`/`clipf.zsh`/`clipf.fish`), generated at release time — no
+compiler or clipf install needed just to get them. Or generate them
+yourself from an installed `clipf`:
+
+```sh
+clipf --completions bash | sudo tee /etc/bash_completion.d/clipf
+clipf --completions zsh > "${fpath[1]}/_clipf"    # any dir on your $fpath
+clipf --completions fish > ~/.config/fish/completions/clipf.fish
+```
 
 ## What it needs
 

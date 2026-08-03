@@ -4,6 +4,7 @@ mod backend;
 mod base64;
 mod check;
 mod cli;
+mod completions;
 mod exit;
 mod json;
 mod osc52;
@@ -39,6 +40,10 @@ fn main() -> ExitCode {
         }
         Action::Version => {
             println!("clipf {}", cli::VERSION);
+            ExitCode::from(EXIT_OK)
+        }
+        Action::Completions(shell) => {
+            print!("{}", completions::script(shell));
             ExitCode::from(EXIT_OK)
         }
         Action::Check => {
