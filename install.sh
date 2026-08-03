@@ -28,7 +28,7 @@ usage() {
 	cat <<'EOF'
 Usage: install.sh [--version VERSION] [--bin-dir DIR] [--remote [USER@]HOST] [--no-path] [--build]
 
-  --version VERSION   release tag to install, e.g. v0.4.0 (default: latest)
+  --version VERSION   release tag to install, e.g. v0.5.0 (default: latest)
   --bin-dir DIR       install target (default: /usr/local/bin when root,
                       $PREFIX/bin under Termux, otherwise $HOME/.local/bin)
   --remote HOST       install onto HOST over ssh instead of this machine

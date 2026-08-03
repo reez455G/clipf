@@ -39,7 +39,7 @@ job is wired to run `cargo publish --locked` automatically on the next
 tagged release once that secret exists; until then, use one of the methods
 above.
 
-`install.sh` flags: `--version v0.4.0` to pin a release, `--bin-dir DIR` to choose
+`install.sh` flags: `--version v0.5.0` to pin a release, `--bin-dir DIR` to choose
 where it lands (default `/usr/local/bin` as root, `$PREFIX/bin` on Termux,
 `~/.local/bin` otherwise), `--no-path` to leave your shell rc files alone, and
 `--build` to compile from source instead of downloading. `CLIPF_VERSION` and
@@ -99,7 +99,7 @@ must speak OSC 52. `--check` will tell you whether yours does.
 
 ```sh
 cargo build --release        # target/release/clipf
-cargo test                   # 37 unit tests
+cargo test                   # 101 unit tests
 ```
 
 ### Building it yourself
@@ -133,6 +133,10 @@ Pushing to a fleet, without the installer:
 | `src/term.rs` | tty opening, multiplexer and emulator detection |
 | `src/secret.rs` | self-wiping byte buffer |
 | `src/check.rs` | `--check` diagnostics |
+| `src/exit.rs` | exit codes and the `ClipfError` type |
+| `src/json.rs` | hand-rolled JSON writer for `--json` |
+| `src/scan.rs` | secret-pattern scan for the copy warning |
+| `src/completions.rs` | `--completions` shell scripts |
 
 ## What this version does that the shell version doesn't
 

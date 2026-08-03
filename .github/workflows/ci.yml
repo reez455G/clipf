@@ -31,3 +31,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Shellcheck
         run: shellcheck install.sh
+
+  no-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cargo.lock names exactly one package (clipf itself)
+        run: |
+          count=$(grep -c '^\[\[package\]\]' Cargo.lock)
+          if [ "$count" -ne 1 ]; then
+            echo "Cargo.lock has $count [[package]] entries, expected exactly 1." >&2
+            echo "This crate is meant to stay dependency-free -- if a dependency" >&2
+            echo "was genuinely needed, update this check, don't just silence it." >&2
+            exit 1
+          fi
