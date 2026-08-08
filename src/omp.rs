@@ -333,20 +333,9 @@ pub fn read_session_raw_heredoc(path: &Path) -> Result<Vec<u8>, ClipfError> {
         .get(..8)
         .unwrap_or(&filename);
 
-    let mut out = String::new();
-    out.push_str(&format!(
-        "mkdir -p ~/.omp/agent/sessions/{parent_dir_name} && (base64 -d 2>/dev/null || base64 -D) << 'EOF_CLIPF_OMP' > ~/.omp/agent/sessions/{parent_dir_name}/{filename}\n"
-    ));
-
-    for chunk in b64.as_bytes().chunks(76) {
-        out.push_str(std::str::from_utf8(chunk).unwrap_or_default());
-        out.push('\n');
-    }
-
-    out.push_str("EOF_CLIPF_OMP\n");
-    out.push_str(&format!(
-        "echo \"✓ Sesi OMP ({short_id}) berhasil dipaste!\"\n"
-    ));
+    let out = format!(
+        "mkdir -p ~/.omp/agent/sessions/{parent_dir_name} && echo \"{b64}\" | (base64 -d 2>/dev/null || base64 -D) > ~/.omp/agent/sessions/{parent_dir_name}/{filename} && printf \"\\r\\033[K✓ Sesi OMP ({short_id}) berhasil dipaste!\\n\"\n"
+    );
 
     Ok(out.into_bytes())
 }
@@ -548,9 +537,7 @@ mod tests {
 
         assert!(snippet.contains("mkdir -p ~/.omp/agent/sessions/-clipf"));
         assert!(snippet.contains("base64 -d"));
-        assert!(snippet.contains("EOF_CLIPF_OMP\n"));
-        assert!(snippet.contains("echo \"✓ Sesi OMP (019fe189) berhasil dipaste!\""));
-
+        assert!(snippet.contains("✓ Sesi OMP (019fe189) berhasil dipaste!"));
         let _ = std::fs::remove_file(&session_file);
         let _ = std::fs::remove_dir(&ws_dir);
         let _ = std::fs::remove_dir(&temp_dir);
