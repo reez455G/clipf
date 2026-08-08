@@ -31,6 +31,7 @@ pub enum BackendSource {
 pub struct Config {
     pub action: Action,
     pub file: Option<PathBuf>,
+    pub omp_session: Option<String>,
     pub backend: Option<Backend>,
     pub backend_source: BackendSource,
     pub strip_newline: bool,
@@ -48,6 +49,7 @@ impl Default for Config {
         Config {
             action: Action::Copy,
             file: None,
+            omp_session: None,
             backend: None,
             backend_source: BackendSource::Auto,
             strip_newline: false,
@@ -132,6 +134,19 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Config, String> 
             "-v" | "--verbose" => cfg.verbose = true,
             "--dry-run" => cfg.dry_run = true,
             "--json" => cfg.json = true,
+            "--omp" | "--omp-session" => {
+                if let Some(v) = inline.clone() {
+                    cfg.omp_session = Some(if v.is_empty() { "latest".to_string() } else { v });
+                } else if let Some(next_arg) = it.peek() {
+                    if !next_arg.starts_with('-') {
+                        cfg.omp_session = Some(it.next().unwrap());
+                    } else {
+                        cfg.omp_session = Some("latest".to_string());
+                    }
+                } else {
+                    cfg.omp_session = Some("latest".to_string());
+                }
+            }
             "--completions" => {
                 let v = take_value("--completions")?;
                 let shell = Shell::parse(&v)
@@ -225,6 +240,7 @@ OPTIONS
         --json           machine-readable output on stdout (copy or --check;
                           not combinable with -p/--print or -O/--paste)
         --completions SHELL   print a completion script: bash|zsh|fish
+        --omp-session [ID], --omp [ID]  copy OMP session transcript (default: latest)
     -v, --verbose        report the chosen backend and byte count
     -h, --help           this text
     -V, --version        version
@@ -399,6 +415,33 @@ mod tests {
         assert!(p(&["--completions", "powershell"]).is_err());
         assert!(p(&["--completions"]).is_err());
     }
+    #[test]
+    fn omp_session_flag_parsing() {
+        assert_eq!(
+            p(&["--omp"]).unwrap().omp_session,
+            Some("latest".to_string())
+        );
+        assert_eq!(
+            p(&["--omp-session"]).unwrap().omp_session,
+            Some("latest".to_string())
+        );
+        assert_eq!(
+            p(&["--omp", "019fc02a"]).unwrap().omp_session,
+            Some("019fc02a".to_string())
+        );
+        assert_eq!(
+            p(&["--omp=019fc02a"]).unwrap().omp_session,
+            Some("019fc02a".to_string())
+        );
+        assert_eq!(
+            p(&["--omp-session", "latest"]).unwrap().omp_session,
+            Some("latest".to_string())
+        );
+        // Followed by another flag
+        let c = p(&["--omp", "--dry-run"]).unwrap();
+        assert_eq!(c.omp_session, Some("latest".to_string()));
+        assert!(c.dry_run);
+    }
 
     #[test]
     fn help_text_mentions_every_flag() {
@@ -406,7 +449,7 @@ mod tests {
         for flag in [
             "--no-newline", "--print", "--backend", "--osc52", "--tmux", "--max",
             "--force", "--paste", "--check", "--dry-run", "--verbose", "--json",
-            "--completions", "--help", "--version",
+            "--completions", "--omp-session", "--omp", "--help", "--version",
         ] {
             assert!(h.contains(flag), "help is missing {flag}");
         }

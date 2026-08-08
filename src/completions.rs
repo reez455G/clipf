@@ -40,7 +40,7 @@ _clipf_completions() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    opts="-n --no-newline -p --print -b --backend -o --osc52 -t --tmux -m --max -f --force -O --paste --check --dry-run --json -v --verbose --completions -h --help -V --version"
+    opts="-n --no-newline -p --print -b --backend -o --osc52 -t --tmux -m --max -f --force -O --paste --check --dry-run --json -v --verbose --completions --omp-session --omp -h --help -V --version"
 
     case "$prev" in
         -b|--backend)
@@ -49,6 +49,22 @@ _clipf_completions() {
             ;;
         --completions)
             COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") )
+            return 0
+            ;;
+        --omp|--omp-session)
+            local omp_dir="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}/sessions"
+            local sess="latest"
+            if [ -d "$omp_dir" ]; then
+                local cwd_name="$(basename "$(pwd)")"
+                local target_dir=""
+                for d in "$omp_dir"/*"$cwd_name"*; do
+                    if [ -d "$d" ]; then target_dir="$d"; break; fi
+                done
+                if [ -z "$target_dir" ]; then target_dir="$omp_dir"; fi
+                local ids="$(find "$target_dir" -name '*.jsonl' 2>/dev/null | sed -E 's/.*_([0-9a-f-]{8,})\.jsonl$/\1/' | sort -u)"
+                sess="latest $ids"
+            fi
+            COMPREPLY=( $(compgen -W "$sess" -- "$cur") )
             return 0
             ;;
         -m|--max)
@@ -85,12 +101,34 @@ _clipf() {
         '--json[machine-readable output on stdout]'
         '(-v --verbose)'{-v,--verbose}'[report the chosen backend and byte count]'
         '--completions[print a shell completion script]:shell:(bash zsh fish)'
+        '--omp-session[copy OMP session transcript]:session ID:_clipf_omp_sessions'
+        '--omp[copy OMP session transcript]:session ID:_clipf_omp_sessions'
         '(-h --help)'{-h,--help}'[show help]'
         '(-V --version)'{-V,--version}'[show version]'
         '*:file:_files'
     )
     _arguments -s -w $opts
 }
+    _clipf_omp_sessions() {
+        local omp_dir="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}/sessions"
+        local -a sess
+        sess=(latest)
+        if [[ -d "$omp_dir" ]]; then
+            local cwd_name="${PWD:t}"
+            local target_dir=""
+            for d in "$omp_dir"/*"$cwd_name"*(N/); do
+                target_dir="$d"
+                break
+            done
+            [[ -z "$target_dir" ]] && target_dir="$omp_dir"
+            for f in "$target_dir"/**/*.jsonl(N); do
+                local id="${${f:t}#*_}"
+                id="${id%.jsonl}"
+                [[ -n "$id" ]] && sess+=("$id")
+            done
+        fi
+        _describe -t sessions 'OMP session' sess
+    }
 _clipf "$@"
 "#;
 
@@ -111,6 +149,7 @@ complete -c clipf -s v -l verbose -d 'report the chosen backend and byte count'
 complete -c clipf -l completions -d 'print a shell completion script' -xa 'bash zsh fish'
 complete -c clipf -s h -l help -d 'show help'
 complete -c clipf -s V -l version -d 'show version'
+complete -c clipf -l omp-session -l omp -d 'copy OMP session transcript' -r -a 'echo latest'
 "#;
 
 #[cfg(test)]
@@ -170,6 +209,8 @@ mod tests {
             "json",
             "verbose",
             "completions",
+            "omp-session",
+            "omp",
             "help",
             "version",
         ] {

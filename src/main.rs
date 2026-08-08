@@ -8,12 +8,12 @@ mod completions;
 mod exit;
 mod json;
 mod osc52;
+mod omp;
 mod scan;
 mod secret;
 mod term;
 
 use std::io::{self, IsTerminal, Read, Write};
-use std::path::Path;
 use std::process::ExitCode;
 
 use backend::Backend;
@@ -117,9 +117,13 @@ fn warn_about_secrets(data: &[u8]) {
 /// whether the read actually succeeds, so it's available for both the
 /// success and the failure JSON shape.
 fn source_label(cfg: &Config) -> String {
-    match &cfg.file {
-        Some(p) => p.display().to_string(),
-        None => "<stdin>".to_string(),
+    if let Some(query) = &cfg.omp_session {
+        format!("omp:{query}")
+    } else {
+        match &cfg.file {
+            Some(p) => p.display().to_string(),
+            None => "<stdin>".to_string(),
+        }
     }
 }
 
@@ -138,8 +142,7 @@ struct CopyOutcome {
 }
 
 fn run_copy(cfg: &Config) -> Result<CopyOutcome, ClipfError> {
-    let (mut data, source) = read_input(cfg.file.as_deref())?;
-
+    let (mut data, source) = read_input(cfg)?;
     if cfg.strip_newline {
         data.trim_trailing_newlines();
     }
@@ -302,8 +305,15 @@ fn read_stdin_secret(r: &mut impl Read) -> io::Result<Secret> {
 
 /// Read the payload into memory. Never staged on disk: the whole point is that
 /// this often carries credentials.
-fn read_input(file: Option<&Path>) -> Result<(Secret, String), ClipfError> {
-    match file {
+fn read_input(cfg: &Config) -> Result<(Secret, String), ClipfError> {
+    if let Some(query) = &cfg.omp_session {
+        let path = omp::resolve_session_path(query)?;
+        let bytes = omp::read_session_transcript(&path)?;
+        let source = format!("omp:{}", path.file_name().unwrap_or_default().to_string_lossy());
+        return Ok((Secret::from_vec(bytes), source));
+    }
+
+    match cfg.file.as_deref() {
         None => {
             if io::stdin().is_terminal() {
                 return Err(ClipfError::usage(
@@ -472,7 +482,11 @@ mod tests {
         // read_input's Ok variant carries a Secret, which deliberately has
         // no Debug impl (avoids ever formatting payload bytes) — so this
         // matches explicitly instead of calling unwrap_err().
-        match read_input(Some(Path::new("/definitely/does/not/exist/clipf-xyz"))) {
+        let cfg = Config {
+            file: Some(std::path::PathBuf::from("/definitely/does/not/exist/clipf-xyz")),
+            ..Config::default()
+        };
+        match read_input(&cfg) {
             Err(e) => assert_eq!(e.code(), 4),
             Ok(_) => panic!("expected a missing-file error"),
         }
@@ -481,12 +495,15 @@ mod tests {
     #[test]
     fn directory_is_input_error() {
         let dir = std::env::temp_dir();
-        match read_input(Some(&dir)) {
+        let cfg = Config {
+            file: Some(dir),
+            ..Config::default()
+        };
+        match read_input(&cfg) {
             Err(e) => assert_eq!(e.code(), 4),
             Ok(_) => panic!("expected a directory error"),
         }
     }
-
     #[test]
     fn unknown_flag_wrapped_as_usage_error() {
         // Mirrors exactly what main() does with a cli::parse error.
