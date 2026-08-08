@@ -312,7 +312,6 @@ pub fn read_session_transcript(path: &Path) -> Result<Vec<u8>, ClipfError> {
 pub fn read_session_raw_heredoc(path: &Path) -> Result<Vec<u8>, ClipfError> {
     let raw = std::fs::read(path)
         .map_err(|e| ClipfError::input(format!("cannot read session file {}: {e}", path.display())))?;
-    let content_str = String::from_utf8_lossy(&raw);
 
     let filename = path
         .file_name()
@@ -325,15 +324,29 @@ pub fn read_session_raw_heredoc(path: &Path) -> Result<Vec<u8>, ClipfError> {
         .map(|n| n.to_string_lossy())
         .unwrap_or_default();
 
+    let b64 = crate::base64::encode(&raw);
+
+    let short_id = filename
+        .split('_')
+        .last()
+        .unwrap_or(&filename)
+        .get(..8)
+        .unwrap_or(&filename);
+
     let mut out = String::new();
     out.push_str(&format!(
-        "mkdir -p ~/.omp/agent/sessions/{parent_dir_name} && cat << 'EOF_CLIPF_OMP' > ~/.omp/agent/sessions/{parent_dir_name}/{filename}\n"
+        "mkdir -p ~/.omp/agent/sessions/{parent_dir_name} && (base64 -d 2>/dev/null || base64 -D) << 'EOF_CLIPF_OMP' > ~/.omp/agent/sessions/{parent_dir_name}/{filename}\n"
     ));
-    out.push_str(&content_str);
-    if !content_str.ends_with('\n') {
+
+    for chunk in b64.as_bytes().chunks(76) {
+        out.push_str(std::str::from_utf8(chunk).unwrap_or_default());
         out.push('\n');
     }
+
     out.push_str("EOF_CLIPF_OMP\n");
+    out.push_str(&format!(
+        "echo \"✓ Sesi OMP ({short_id}) berhasil dipaste!\"\n"
+    ));
 
     Ok(out.into_bytes())
 }
@@ -525,7 +538,7 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("clipf_test_omp_heredoc");
         let ws_dir = temp_dir.join("-clipf");
         let _ = std::fs::create_dir_all(&ws_dir);
-        let session_file = ws_dir.join("test_session.jsonl");
+        let session_file = ws_dir.join("2026-08-08T13-21-53-337Z_019fe189-82b9-7000-bf75-068024df70fa.jsonl");
 
         let jsonl = "{\"type\":\"title\",\"title\":\"Test Session\"}\n";
         std::fs::write(&session_file, jsonl).unwrap();
@@ -534,9 +547,9 @@ mod tests {
         let snippet = String::from_utf8(bytes).unwrap();
 
         assert!(snippet.contains("mkdir -p ~/.omp/agent/sessions/-clipf"));
-        assert!(snippet.contains("cat << 'EOF_CLIPF_OMP' > ~/.omp/agent/sessions/-clipf/test_session.jsonl"));
-        assert!(snippet.contains("{\"type\":\"title\",\"title\":\"Test Session\"}"));
-        assert!(snippet.ends_with("EOF_CLIPF_OMP\n"));
+        assert!(snippet.contains("base64 -d"));
+        assert!(snippet.contains("EOF_CLIPF_OMP\n"));
+        assert!(snippet.contains("echo \"✓ Sesi OMP (019fe189) berhasil dipaste!\""));
 
         let _ = std::fs::remove_file(&session_file);
         let _ = std::fs::remove_dir(&ws_dir);
