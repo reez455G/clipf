@@ -40,7 +40,7 @@ _clipf_completions() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    opts="-n --no-newline -p --print -b --backend -o --osc52 -t --tmux -m --max -f --force -O --paste --check --dry-run --json -v --verbose --completions --omp-session --omp --omp-raw --omp-jsonl -h --help -V --version"
+    opts="-n --no-newline -p --print -b --backend -o --osc52 -t --tmux -m --max -f --force -O --paste --check --dry-run --json -v --verbose --completions --omp-session --omp --omp-raw --omp-jsonl --update update upgrade -h --help -V --version"
 
     case "$prev" in
         -b|--backend)
@@ -105,6 +105,7 @@ _clipf() {
         '--omp[copy OMP session transcript]:session ID:_clipf_omp_sessions'
         '--omp-raw[copy raw OMP session jsonl script]:session ID:_clipf_omp_sessions'
         '--omp-jsonl[copy raw OMP session jsonl script]:session ID:_clipf_omp_sessions'
+        '--update[update clipf to latest release]'
         '(-h --help)'{-h,--help}'[show help]'
         '(-V --version)'{-V,--version}'[show version]'
         '*:file:_files'
@@ -152,6 +153,7 @@ complete -c clipf -l completions -d 'print a shell completion script' -xa 'bash 
 complete -c clipf -s h -l help -d 'show help'
 complete -c clipf -s V -l version -d 'show version'
 complete -c clipf -l omp-session -l omp -l omp-raw -l omp-jsonl -d 'copy OMP session' -r -a 'echo latest'
+complete -c clipf -l update -d 'update clipf to latest release'
 "#;
 
 #[cfg(test)]
@@ -215,6 +217,7 @@ mod tests {
             "omp",
             "omp-raw",
             "omp-jsonl",
+            "update",
             "help",
             "version",
         ] {

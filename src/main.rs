@@ -54,6 +54,10 @@ fn main() -> ExitCode {
             }
             ExitCode::from(EXIT_OK)
         }
+        Action::Update => match run_update() {
+            Ok(()) => ExitCode::from(EXIT_OK),
+            Err(e) => fail(&e),
+        },
         // cli::parse rejects --json with -O/--paste, so run_paste never
         // needs to know about cfg.json.
         Action::Paste => match run_paste(&cfg) {
@@ -126,6 +130,29 @@ fn source_label(cfg: &Config) -> String {
             Some(p) => p.display().to_string(),
             None => "<stdin>".to_string(),
         }
+    }
+}
+fn run_update() -> Result<(), ClipfError> {
+    eprintln!("clipf: updating to the latest version...");
+    #[cfg(windows)]
+    let status = std::process::Command::new("powershell")
+        .arg("-Command")
+        .arg("irm https://raw.githubusercontent.com/reez455G/clipf/main/install.ps1 | iex")
+        .status();
+
+    #[cfg(not(windows))]
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("curl -fsSL https://raw.githubusercontent.com/reez455G/clipf/main/install.sh | sh")
+        .status();
+
+    let status = status.map_err(|e| ClipfError::backend_failed(format!("failed to run updater: {e}")))?;
+
+    if status.success() {
+        eprintln!("clipf: update completed successfully.");
+        Ok(())
+    } else {
+        Err(ClipfError::backend_failed("updater exited non-zero"))
     }
 }
 

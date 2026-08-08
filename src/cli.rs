@@ -13,6 +13,7 @@ pub enum Action {
     Copy,
     Paste,
     Check,
+    Update,
     Help,
     Version,
     Completions(Shell),
@@ -98,6 +99,10 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Config, String> 
 
     while let Some(arg) = it.next() {
         if no_more_flags || !arg.starts_with('-') || arg == "-" {
+            if arg == "update" || arg == "upgrade" {
+                cfg.action = Action::Update;
+                continue;
+            }
             if positional_seen {
                 return Err("more than one FILE given".into());
             }
@@ -132,6 +137,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Config, String> 
             "-n" | "--no-newline" => cfg.strip_newline = true,
             "-p" | "--print" => cfg.tee = true,
             "-t" | "--tmux" => cfg.passthrough = true,
+            "--update" | "--upgrade" => cfg.action = Action::Update,
             "-f" | "--force" => cfg.force = true,
             "-v" | "--verbose" => cfg.verbose = true,
             "--dry-run" => cfg.dry_run = true,
@@ -258,6 +264,7 @@ OPTIONS
         --omp-session [ID], --omp [ID]  copy OMP session transcript (default: latest)
     -v, --verbose        report the chosen backend and byte count
         --omp-raw [ID], --omp-jsonl [ID]  copy raw OMP session .jsonl file as pasteable shell script
+        --update, update       update clipf to the latest release
     -h, --help           this text
     -V, --version        version
 
@@ -472,12 +479,19 @@ mod tests {
         );
     }
     #[test]
+    fn update_flag_parsing() {
+        assert_eq!(p(&["update"]).unwrap().action, Action::Update);
+        assert_eq!(p(&["upgrade"]).unwrap().action, Action::Update);
+        assert_eq!(p(&["--update"]).unwrap().action, Action::Update);
+        assert_eq!(p(&["--upgrade"]).unwrap().action, Action::Update);
+    }
+    #[test]
     fn help_text_mentions_every_flag() {
         let h = help();
         for flag in [
             "--no-newline", "--print", "--backend", "--osc52", "--tmux", "--max",
             "--force", "--paste", "--check", "--dry-run", "--verbose", "--json",
-            "--completions", "--omp-session", "--omp", "--omp-raw", "--omp-jsonl", "--help", "--version",
+            "--completions", "--omp-session", "--omp", "--omp-raw", "--omp-jsonl", "--update", "--help", "--version",
         ] {
             assert!(h.contains(flag), "help is missing {flag}");
         }
