@@ -1,6 +1,6 @@
 [package]
 name = "clipf"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 rust-version = "1.70"
 description = "Copy file contents to the clipboard, locally or over SSH via OSC 52"

@@ -8,8 +8,10 @@ escape sequence output.
 clipf server.conf
 grep -v '^#' fw-rules.sh | clipf
 clipf -n token.txt          # no trailing newline
+clipf --omp latest          # copy Oh My Pi session transcript to Markdown
+clipf --omp-jsonl           # copy OMP session as self-contained terminal restore script
+clipf update                # self-update clipf to the latest release
 clipf --check               # diagnose "why isn't this working"
-```
 
 ## Install
 
@@ -211,6 +213,28 @@ awk '/START/,/END/' app.log | clipf            # everything between two markers
 ssh host 'tail -n 10 /var/log/app.log' | clipf
 ssh host 'journalctl -u myapp -n 50' | grep ERROR | clipf
 ```
+## Oh My Pi (OMP) Session Integration
+
+Copy Oh My Pi AI agent session history directly to your clipboard with tab completion:
+
+```sh
+clipf --omp                 # copy latest OMP session transcript in current workspace as Markdown
+clipf --omp 019fe189        # copy specific session transcript by UUID or ID prefix
+clipf --omp-jsonl           # copy session as a self-contained, base64-encoded shell script
+```
+
+- **`clipf --omp [ID]`**: Extracts session `.jsonl` contents into clean Markdown (`# Title`, `## User`, `## Assistant`) for reading, note-taking, or sharing.
+- **`clipf --omp-jsonl [ID]`**: Copies a portable heredoc script. When pasted into a terminal on another device, it creates `~/.omp/agent/sessions/<workspace>/<file>.jsonl` and prints a clean success message, allowing you to instantly resume the session via `omp --session <id>`.
+
+## Self-Updating
+
+Update `clipf` to the latest release with one command:
+
+```sh
+clipf update
+```
+
+Automatically detects your platform, downloads the latest binary, verifies SHA-256 checksums, and updates `clipf` in your `PATH`.
 
 ## tmux
 
