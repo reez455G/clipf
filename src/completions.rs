@@ -40,7 +40,7 @@ _clipf_completions() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    opts="-n --no-newline -p --print -b --backend -o --osc52 -t --tmux -m --max -f --force -O --paste --check --dry-run --json -v --verbose --completions --omp-session --omp -h --help -V --version"
+    opts="-n --no-newline -p --print -b --backend -o --osc52 -t --tmux -m --max -f --force -O --paste --check --dry-run --json -v --verbose --completions --omp-session --omp --omp-raw --omp-jsonl -h --help -V --version"
 
     case "$prev" in
         -b|--backend)
@@ -51,7 +51,7 @@ _clipf_completions() {
             COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") )
             return 0
             ;;
-        --omp|--omp-session)
+        --omp|--omp-session|--omp-raw|--omp-jsonl)
             local omp_dir="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}/sessions"
             local sess="latest"
             if [ -d "$omp_dir" ]; then
@@ -103,6 +103,8 @@ _clipf() {
         '--completions[print a shell completion script]:shell:(bash zsh fish)'
         '--omp-session[copy OMP session transcript]:session ID:_clipf_omp_sessions'
         '--omp[copy OMP session transcript]:session ID:_clipf_omp_sessions'
+        '--omp-raw[copy raw OMP session jsonl script]:session ID:_clipf_omp_sessions'
+        '--omp-jsonl[copy raw OMP session jsonl script]:session ID:_clipf_omp_sessions'
         '(-h --help)'{-h,--help}'[show help]'
         '(-V --version)'{-V,--version}'[show version]'
         '*:file:_files'
@@ -149,7 +151,7 @@ complete -c clipf -s v -l verbose -d 'report the chosen backend and byte count'
 complete -c clipf -l completions -d 'print a shell completion script' -xa 'bash zsh fish'
 complete -c clipf -s h -l help -d 'show help'
 complete -c clipf -s V -l version -d 'show version'
-complete -c clipf -l omp-session -l omp -d 'copy OMP session transcript' -r -a 'echo latest'
+complete -c clipf -l omp-session -l omp -l omp-raw -l omp-jsonl -d 'copy OMP session' -r -a 'echo latest'
 "#;
 
 #[cfg(test)]
@@ -211,6 +213,8 @@ mod tests {
             "completions",
             "omp-session",
             "omp",
+            "omp-raw",
+            "omp-jsonl",
             "help",
             "version",
         ] {

@@ -32,6 +32,7 @@ pub struct Config {
     pub action: Action,
     pub file: Option<PathBuf>,
     pub omp_session: Option<String>,
+    pub omp_raw: Option<String>,
     pub backend: Option<Backend>,
     pub backend_source: BackendSource,
     pub strip_newline: bool,
@@ -50,6 +51,7 @@ impl Default for Config {
             action: Action::Copy,
             file: None,
             omp_session: None,
+            omp_raw: None,
             backend: None,
             backend_source: BackendSource::Auto,
             strip_newline: false,
@@ -147,6 +149,19 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Config, String> 
                     cfg.omp_session = Some("latest".to_string());
                 }
             }
+            "--omp-raw" | "--omp-jsonl" => {
+                if let Some(v) = inline.clone() {
+                    cfg.omp_raw = Some(if v.is_empty() { "latest".to_string() } else { v });
+                } else if let Some(next_arg) = it.peek() {
+                    if !next_arg.starts_with('-') {
+                        cfg.omp_raw = Some(it.next().unwrap());
+                    } else {
+                        cfg.omp_raw = Some("latest".to_string());
+                    }
+                } else {
+                    cfg.omp_raw = Some("latest".to_string());
+                }
+            }
             "--completions" => {
                 let v = take_value("--completions")?;
                 let shell = Shell::parse(&v)
@@ -242,6 +257,7 @@ OPTIONS
         --completions SHELL   print a completion script: bash|zsh|fish
         --omp-session [ID], --omp [ID]  copy OMP session transcript (default: latest)
     -v, --verbose        report the chosen backend and byte count
+        --omp-raw [ID], --omp-jsonl [ID]  copy raw OMP session .jsonl file as pasteable shell script
     -h, --help           this text
     -V, --version        version
 
@@ -441,15 +457,27 @@ mod tests {
         let c = p(&["--omp", "--dry-run"]).unwrap();
         assert_eq!(c.omp_session, Some("latest".to_string()));
         assert!(c.dry_run);
-    }
 
+        assert_eq!(
+            p(&["--omp-raw"]).unwrap().omp_raw,
+            Some("latest".to_string())
+        );
+        assert_eq!(
+            p(&["--omp-jsonl"]).unwrap().omp_raw,
+            Some("latest".to_string())
+        );
+        assert_eq!(
+            p(&["--omp-raw", "019fc02a"]).unwrap().omp_raw,
+            Some("019fc02a".to_string())
+        );
+    }
     #[test]
     fn help_text_mentions_every_flag() {
         let h = help();
         for flag in [
             "--no-newline", "--print", "--backend", "--osc52", "--tmux", "--max",
             "--force", "--paste", "--check", "--dry-run", "--verbose", "--json",
-            "--completions", "--omp-session", "--omp", "--help", "--version",
+            "--completions", "--omp-session", "--omp", "--omp-raw", "--omp-jsonl", "--help", "--version",
         ] {
             assert!(h.contains(flag), "help is missing {flag}");
         }

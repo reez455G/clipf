@@ -117,7 +117,9 @@ fn warn_about_secrets(data: &[u8]) {
 /// whether the read actually succeeds, so it's available for both the
 /// success and the failure JSON shape.
 fn source_label(cfg: &Config) -> String {
-    if let Some(query) = &cfg.omp_session {
+    if let Some(query) = &cfg.omp_raw {
+        format!("omp-raw:{query}")
+    } else if let Some(query) = &cfg.omp_session {
         format!("omp:{query}")
     } else {
         match &cfg.file {
@@ -306,6 +308,13 @@ fn read_stdin_secret(r: &mut impl Read) -> io::Result<Secret> {
 /// Read the payload into memory. Never staged on disk: the whole point is that
 /// this often carries credentials.
 fn read_input(cfg: &Config) -> Result<(Secret, String), ClipfError> {
+    if let Some(query) = &cfg.omp_raw {
+        let path = omp::resolve_session_path(query)?;
+        let bytes = omp::read_session_raw_heredoc(&path)?;
+        let source = format!("omp-raw:{}", path.file_name().unwrap_or_default().to_string_lossy());
+        return Ok((Secret::from_vec(bytes), source));
+    }
+
     if let Some(query) = &cfg.omp_session {
         let path = omp::resolve_session_path(query)?;
         let bytes = omp::read_session_transcript(&path)?;

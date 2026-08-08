@@ -304,7 +304,36 @@ pub fn read_session_transcript(path: &Path) -> Result<Vec<u8>, ClipfError> {
         out.push_str("\n\n");
         out.push_str(&text);
         out.push_str("\n\n");
+        out.push_str("\n\n");
     }
+
+    Ok(out.into_bytes())
+}
+pub fn read_session_raw_heredoc(path: &Path) -> Result<Vec<u8>, ClipfError> {
+    let raw = std::fs::read(path)
+        .map_err(|e| ClipfError::input(format!("cannot read session file {}: {e}", path.display())))?;
+    let content_str = String::from_utf8_lossy(&raw);
+
+    let filename = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+
+    let parent_dir_name = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "mkdir -p ~/.omp/agent/sessions/{parent_dir_name} && cat << 'EOF_CLIPF_OMP' > ~/.omp/agent/sessions/{parent_dir_name}/{filename}\n"
+    ));
+    out.push_str(&content_str);
+    if !content_str.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("EOF_CLIPF_OMP\n");
 
     Ok(out.into_bytes())
 }
@@ -488,6 +517,29 @@ mod tests {
         let _ = std::fs::remove_file(&session_file);
         let _ = std::fs::remove_dir(&ws_dir);
         let _ = std::fs::remove_dir(&sessions_dir);
+        let _ = std::fs::remove_dir(&temp_dir);
+    }
+
+    #[test]
+    fn read_raw_heredoc_from_jsonl() {
+        let temp_dir = std::env::temp_dir().join("clipf_test_omp_heredoc");
+        let ws_dir = temp_dir.join("-clipf");
+        let _ = std::fs::create_dir_all(&ws_dir);
+        let session_file = ws_dir.join("test_session.jsonl");
+
+        let jsonl = "{\"type\":\"title\",\"title\":\"Test Session\"}\n";
+        std::fs::write(&session_file, jsonl).unwrap();
+
+        let bytes = read_session_raw_heredoc(&session_file).unwrap();
+        let snippet = String::from_utf8(bytes).unwrap();
+
+        assert!(snippet.contains("mkdir -p ~/.omp/agent/sessions/-clipf"));
+        assert!(snippet.contains("cat << 'EOF_CLIPF_OMP' > ~/.omp/agent/sessions/-clipf/test_session.jsonl"));
+        assert!(snippet.contains("{\"type\":\"title\",\"title\":\"Test Session\"}"));
+        assert!(snippet.ends_with("EOF_CLIPF_OMP\n"));
+
+        let _ = std::fs::remove_file(&session_file);
+        let _ = std::fs::remove_dir(&ws_dir);
         let _ = std::fs::remove_dir(&temp_dir);
     }
 }
